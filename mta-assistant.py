@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.1.0  ( Made By AmooReza )
+MTA Assistant - v1.2.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -9,13 +9,13 @@ import shutil
 import winreg
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QStandardPaths
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup, QProgressBar
 )
 
 try:
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -98,7 +98,6 @@ def save_name(name: str) -> None:
 
 def get_saved_faction() -> str | None:
     value = _read_value(REG_VALUE_FACTION)
-    # Backward-compatibility: old value "Federal" now maps to "Police Federal"
     if value == "Federal":
         return "Police Federal"
     if value and value in FACTIONS:
@@ -187,7 +186,7 @@ def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYT
 
 
 # ---------------------------------------------------------------------------
-# Report calculation (faction-aware)
+# Report calculation
 # ---------------------------------------------------------------------------
 def calculate_report(base_folder: str, faction: str):
     screenshots_dir = Path(base_folder) / "screenshots"
@@ -218,109 +217,156 @@ def calculate_report(base_folder: str, faction: str):
     return results, None
 
 
-# ---------------------------------------------------------------------------
-# Create work report
-# ---------------------------------------------------------------------------
-def create_work_report(base_folder: str, game_name: str, faction: str):
-    if not PIL_AVAILABLE:
-        return None, None, (
-            "The 'Pillow' library is required for this feature but is not "
-            "installed.\n\nPlease run:  pip install Pillow"
-        )
-
+def count_total_pngs(base_folder: str, faction: str) -> int:
+    """Fast pre-count of PNGs in the first-level category folders."""
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
-        return None, None, (
-            "The 'screenshots' folder was not found at:\n"
-            f"{screenshots_dir}"
-        )
-
+        return 0
     try:
         subdirs = _collect_category_dirs(screenshots_dir)
-    except OSError as exc:
-        return None, None, f"Failed to read the screenshots folder:\n{exc}"
-
-    # -------- First check: is there ANY PNG anywhere? --------
-    total_pngs = 0
+    except OSError:
+        return 0
+    total = 0
     for _, key, _ in get_prices(faction):
         cat = subdirs.get(key)
         if cat is not None:
-            total_pngs += _count_pngs(cat)
+            total += _count_pngs(cat)
+    return total
 
-    if total_pngs == 0:
-        # Nothing to do — don't create anything on Desktop.
-        return None, None, (
-            "No PNG screenshots were found inside any category folder.\n"
-            "Nothing was created on the Desktop."
-        )
 
-    # -------- We have at least one PNG, so build everything --------
-    desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
-    if not desktop_path:
-        return None, None, "Could not determine the Desktop folder location."
-    desktop = Path(desktop_path)
-    if not desktop.is_dir():
-        return None, None, f"Desktop folder not found:\n{desktop}"
+# ---------------------------------------------------------------------------
+# Convert worker thread
+# ---------------------------------------------------------------------------
+class ConvertWorker(QThread):
+    """
+    Runs the PNG -> JPG conversion + zip in a background thread so the UI
+    stays responsive.
+    Signals:
+        progress(done, total)
+        finished_ok(target_path, zip_path)
+        failed(error_message)
+    """
+    progress = Signal(int, int)
+    finished_ok = Signal(str, str)
+    failed = Signal(str)
 
-    target = desktop / game_name
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return None, None, f"Failed to create the folder on the Desktop:\n{exc}"
+    def __init__(self, base_folder: str, game_name: str, faction: str, parent=None):
+        super().__init__(parent)
+        self.base_folder = base_folder
+        self.game_name = game_name
+        self.faction = faction
 
-    converted_total = 0
+    def run(self) -> None:
+        if not PIL_AVAILABLE:
+            self.failed.emit(
+                "The 'Pillow' library is required for this feature but is "
+                "not installed.\n\nPlease run:  pip install Pillow"
+            )
+            return
 
-    QGuiApplication.setOverrideCursor(Qt.WaitCursor)
-    try:
-        # Create ALL category folders (even the empty ones)
-        for display_name, key, _ in get_prices(faction):
+        screenshots_dir = Path(self.base_folder) / "screenshots"
+        if not screenshots_dir.is_dir():
+            self.failed.emit(
+                "The 'screenshots' folder was not found at:\n"
+                f"{screenshots_dir}"
+            )
+            return
+
+        try:
+            subdirs = _collect_category_dirs(screenshots_dir)
+        except OSError as exc:
+            self.failed.emit(f"Failed to read the screenshots folder:\n{exc}")
+            return
+
+        # Count total PNGs
+        total = 0
+        for _, key, _ in get_prices(self.faction):
+            cat = subdirs.get(key)
+            if cat is not None:
+                total += _count_pngs(cat)
+
+        if total == 0:
+            self.failed.emit(
+                "No PNG screenshots were found inside any category folder.\n"
+                "Nothing was created on the Desktop."
+            )
+            return
+
+        self.progress.emit(0, total)
+
+        # Desktop path
+        desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
+        if not desktop_path:
+            self.failed.emit("Could not determine the Desktop folder location.")
+            return
+        desktop = Path(desktop_path)
+        if not desktop.is_dir():
+            self.failed.emit(f"Desktop folder not found:\n{desktop}")
+            return
+
+        target = desktop / self.game_name
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.failed.emit(f"Failed to create the folder on the Desktop:\n{exc}")
+            return
+
+        done = 0
+        for display_name, key, _ in get_prices(self.faction):
+            # Create every category folder, even empty ones
             dst_dir = target / display_name
             try:
                 dst_dir.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
-                return None, None, (
+                self.failed.emit(
                     f"Failed to create '{display_name}' folder:\n{exc}"
                 )
+                return
 
             cat = subdirs.get(key)
             if cat is None:
-                continue  # Empty category — folder already created above
+                continue
 
-            pngs = [
-                f for f in cat.iterdir()
-                if f.is_file() and f.suffix.lower() == ".png"
-            ]
+            try:
+                pngs = [
+                    f for f in cat.iterdir()
+                    if f.is_file() and f.suffix.lower() == ".png"
+                ]
+            except OSError:
+                pngs = []
 
             for png in pngs:
                 dst_jpg = dst_dir / (png.stem + ".jpg")
                 try:
                     compress_to_jpg(png, dst_jpg)
-                    converted_total += 1
                 except Exception as exc:
-                    return None, None, (
+                    self.failed.emit(
                         f"Failed to process '{png.name}':\n{exc}"
                     )
-    finally:
-        QGuiApplication.restoreOverrideCursor()
+                    return
+                done += 1
+                self.progress.emit(done, total)
 
-    # -------- Zip --------
-    zip_base = desktop / game_name
-    zip_path = Path(f"{zip_base}.zip")
-    try:
-        if zip_path.exists():
-            zip_path.unlink()
-        shutil.make_archive(
-            base_name=str(zip_base),
-            format="zip",
-            root_dir=str(desktop),
-            base_dir=target.name,
-        )
-    except OSError as exc:
-        return target, None, (
-            f"The folder was created successfully, but zipping it failed:\n{exc}"
-        )
+        # Zip
+        zip_base = desktop / self.game_name
+        zip_path = Path(f"{zip_base}.zip")
+        try:
+            if zip_path.exists():
+                zip_path.unlink()
+            shutil.make_archive(
+                base_name=str(zip_base),
+                format="zip",
+                root_dir=str(desktop),
+                base_dir=target.name,
+            )
+        except OSError as exc:
+            self.failed.emit(
+                "The folder was created successfully, but zipping it failed:\n"
+                f"{exc}"
+            )
+            return
 
-    return target, zip_path, None
+        self.finished_ok.emit(str(target), str(zip_path))
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +634,51 @@ class GameNameDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Progress dialog
+# ---------------------------------------------------------------------------
+class ProgressDialog(QDialog):
+    def __init__(self, parent, total: int):
+        super().__init__(parent)
+        self.setWindowTitle("Creating Work Report")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        # Prevent closing while the worker is running
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 22, 22, 22)
+        root.setSpacing(14)
+
+        title = QLabel("Compressing screenshots...")
+        title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        root.addWidget(title)
+
+        hint = QLabel(
+            "Please wait while PNG files are converted to JPG (max 250 KB) "
+            "and packed into a zip file."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        root.addWidget(hint)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMinimumHeight(22)
+        root.addWidget(self.progress_bar)
+
+        self.label = QLabel(f"0 / {total} files")
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color: #2c3e50; font-weight: 600;")
+        root.addWidget(self.label)
+
+    def update_progress(self, done: int, total: int) -> None:
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(done)
+        self.label.setText(f"{done} / {total} files")
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
@@ -596,6 +687,9 @@ class MainWindow(QMainWindow):
         self.mta_folder = mta_folder
         self.game_name = game_name or ""
         self.faction = faction
+
+        self._convert_worker: ConvertWorker | None = None
+        self._convert_dialog: ProgressDialog | None = None
 
         self.setWindowTitle(APP_TITLE)
         self.setMinimumSize(960, 780)
@@ -1025,25 +1119,52 @@ class MainWindow(QMainWindow):
         return self.game_name
 
     def create_report_folder(self) -> None:
+        if self._convert_worker is not None and self._convert_worker.isRunning():
+            QMessageBox.information(
+                self, "Please Wait",
+                "A work report is already being created. Please wait for it "
+                "to finish."
+            )
+            return
+
         name = self._ensure_game_name()
         if not name:
             return
 
-        target, zip_path, error = create_work_report(
-            self.mta_folder, name, self.faction
-        )
-
-        if target is None:
-            QMessageBox.warning(self, "Create Report Error", error)
-            return
-
-        if zip_path is None:
+        # Fast pre-count so we can size the progress bar correctly
+        total = count_total_pngs(self.mta_folder, self.faction)
+        if total == 0:
             QMessageBox.warning(
-                self, "Zip Error",
-                f"The folder was created at:\n{target}\n\n"
-                f"But the .zip file could not be created:\n{error}"
+                self, "Create Report Error",
+                "No PNG screenshots were found inside any category folder.\n"
+                "Nothing was created on the Desktop."
             )
             return
+
+        # Progress dialog
+        self._convert_dialog = ProgressDialog(self, total)
+
+        # Worker
+        worker = ConvertWorker(self.mta_folder, name, self.faction, self)
+        self._convert_worker = worker
+
+        worker.progress.connect(self._convert_dialog.update_progress)
+        worker.finished_ok.connect(self._on_convert_finished)
+        worker.failed.connect(self._on_convert_failed)
+
+        worker.start()
+        self._convert_dialog.exec()
+
+    def _on_convert_finished(self, target: str, zip_path: str) -> None:
+        # Close the progress dialog
+        if self._convert_dialog is not None:
+            self._convert_dialog.accept()
+            self._convert_dialog = None
+
+        # Clean up worker
+        if self._convert_worker is not None:
+            self._convert_worker.wait()
+            self._convert_worker = None
 
         QMessageBox.information(
             self, "Work Report Created",
@@ -1053,6 +1174,17 @@ class MainWindow(QMainWindow):
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
         )
+
+    def _on_convert_failed(self, message: str) -> None:
+        if self._convert_dialog is not None:
+            self._convert_dialog.reject()
+            self._convert_dialog = None
+
+        if self._convert_worker is not None:
+            self._convert_worker.wait()
+            self._convert_worker = None
+
+        QMessageBox.warning(self, "Create Report Error", message)
 
     def clear_reports(self) -> None:
         screenshots_dir = Path(self.mta_folder) / "screenshots"
@@ -1252,6 +1384,20 @@ class MainWindow(QMainWindow):
                 background: #ffffff;
                 border: 1px solid #e1e8ed;
                 border-radius: 10px;
+            }
+
+            QProgressBar {
+                background: #ecf0f1;
+                border: 1px solid #d6dee6;
+                border-radius: 6px;
+                text-align: center;
+                color: #2c3e50;
+                font-weight: 600;
+                height: 22px;
+            }
+            QProgressBar::chunk {
+                background: #3498db;
+                border-radius: 5px;
             }
 
             QTableWidget {
