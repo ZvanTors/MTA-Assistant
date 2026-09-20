@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.0.0  ( Made By AmooReza )
+MTA Assistant - v1.1.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -235,6 +235,26 @@ def create_work_report(base_folder: str, game_name: str, faction: str):
             f"{screenshots_dir}"
         )
 
+    try:
+        subdirs = _collect_category_dirs(screenshots_dir)
+    except OSError as exc:
+        return None, None, f"Failed to read the screenshots folder:\n{exc}"
+
+    # -------- First check: is there ANY PNG anywhere? --------
+    total_pngs = 0
+    for _, key, _ in get_prices(faction):
+        cat = subdirs.get(key)
+        if cat is not None:
+            total_pngs += _count_pngs(cat)
+
+    if total_pngs == 0:
+        # Nothing to do — don't create anything on Desktop.
+        return None, None, (
+            "No PNG screenshots were found inside any category folder.\n"
+            "Nothing was created on the Desktop."
+        )
+
+    # -------- We have at least one PNG, so build everything --------
     desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
     if not desktop_path:
         return None, None, "Could not determine the Desktop folder location."
@@ -248,27 +268,12 @@ def create_work_report(base_folder: str, game_name: str, faction: str):
     except OSError as exc:
         return None, None, f"Failed to create the folder on the Desktop:\n{exc}"
 
-    try:
-        subdirs = _collect_category_dirs(screenshots_dir)
-    except OSError as exc:
-        return None, None, f"Failed to read the screenshots folder:\n{exc}"
-
     converted_total = 0
 
     QGuiApplication.setOverrideCursor(Qt.WaitCursor)
     try:
+        # Create ALL category folders (even the empty ones)
         for display_name, key, _ in get_prices(faction):
-            cat = subdirs.get(key)
-            if cat is None:
-                continue
-
-            pngs = [
-                f for f in cat.iterdir()
-                if f.is_file() and f.suffix.lower() == ".png"
-            ]
-            if not pngs:
-                continue
-
             dst_dir = target / display_name
             try:
                 dst_dir.mkdir(parents=True, exist_ok=True)
@@ -276,6 +281,15 @@ def create_work_report(base_folder: str, game_name: str, faction: str):
                 return None, None, (
                     f"Failed to create '{display_name}' folder:\n{exc}"
                 )
+
+            cat = subdirs.get(key)
+            if cat is None:
+                continue  # Empty category — folder already created above
+
+            pngs = [
+                f for f in cat.iterdir()
+                if f.is_file() and f.suffix.lower() == ".png"
+            ]
 
             for png in pngs:
                 dst_jpg = dst_dir / (png.stem + ".jpg")
@@ -289,12 +303,7 @@ def create_work_report(base_folder: str, game_name: str, faction: str):
     finally:
         QGuiApplication.restoreOverrideCursor()
 
-    if converted_total == 0:
-        return None, None, (
-            "No PNG screenshots were found inside the first-level category "
-            "folders to convert."
-        )
-
+    # -------- Zip --------
     zip_base = desktop / game_name
     zip_path = Path(f"{zip_base}.zip")
     try:
