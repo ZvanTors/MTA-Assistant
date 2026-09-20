@@ -14,7 +14,8 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
-    QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame
+    QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
+    QRadioButton, QButtonGroup
 )
 
 try:
@@ -34,16 +35,32 @@ APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 REG_PATH = r"Software\MTA Assistant"
 REG_VALUE_FOLDER = "MTAFolder"
 REG_VALUE_NAME = "GameName"
+REG_VALUE_FACTION = "Faction"
 
 MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
 
-PRICES = [
-    ("Arrest",  "arrest",  5000),
-    ("Kill",    "kill",    2000),
-    ("Shift",   "shift",   5000),
-    ("TakeGun", "takegun", 8000),
-    ("Wanted",  "wanted",  6000),
-]
+FACTIONS = {
+    "Police Federal": [
+        ("Arrest",  "arrest",  5000),
+        ("Kill",    "kill",    2000),
+        ("Shift",   "shift",   5000),
+        ("TakeGun", "takegun", 8000),
+        ("Wanted",  "wanted",  6000),
+    ],
+    "National Guard": [
+        ("Shift",   "shift",   7500),
+        ("Arrest",  "arrest",  2000),
+        ("Wanted",  "wanted",  2000),
+        ("TakeGun", "takegun", 2000),
+        ("Kill",    "kill",    4000),
+    ],
+}
+
+DEFAULT_FACTION = "Police Federal"
+
+
+def get_prices(faction: str):
+    return FACTIONS.get(faction, FACTIONS[DEFAULT_FACTION])
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +96,20 @@ def save_name(name: str) -> None:
     _write_value(REG_VALUE_NAME, name)
 
 
+def get_saved_faction() -> str | None:
+    value = _read_value(REG_VALUE_FACTION)
+    # Backward-compatibility: old value "Federal" now maps to "Police Federal"
+    if value == "Federal":
+        return "Police Federal"
+    if value and value in FACTIONS:
+        return value
+    return None
+
+
+def save_faction(faction: str) -> None:
+    _write_value(REG_VALUE_FACTION, faction)
+
+
 # ---------------------------------------------------------------------------
 # Filesystem helpers
 # ---------------------------------------------------------------------------
@@ -111,18 +142,11 @@ def _collect_category_dirs(screenshots_dir: Path) -> dict[str, Path]:
 
 
 # ---------------------------------------------------------------------------
-# Image processing: PNG -> JPG, compressed under MAX_IMAGE_BYTES
+# Image processing
 # ---------------------------------------------------------------------------
 def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYTES) -> None:
-    """
-    Convert a PNG to a JPG file whose size is at most `max_bytes`.
-    Strategy: start at high quality, reduce quality step by step; if that's
-    not enough, progressively downscale the image and reset quality.
-    Transparency is flattened onto a white background.
-    """
     img = Image.open(src_png)
 
-    # Normalize to RGB (flatten transparency on white)
     if img.mode in ("RGBA", "LA"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         bg.paste(img, mask=img.split()[-1])
@@ -148,11 +172,9 @@ def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYT
         if quality > 50:
             quality -= 7
         else:
-            # Downscale and reset quality
             new_w = max(int(work.width * 0.85), 320)
             new_h = max(int(work.height * 0.85), 320)
             if (new_w, new_h) == (work.width, work.height):
-                # Can't shrink further; accept smallest possible
                 buf = io.BytesIO()
                 work.save(buf, format="JPEG", quality=35, optimize=True)
                 break
@@ -165,9 +187,9 @@ def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYT
 
 
 # ---------------------------------------------------------------------------
-# Report calculation
+# Report calculation (faction-aware)
 # ---------------------------------------------------------------------------
-def calculate_report(base_folder: str):
+def calculate_report(base_folder: str, faction: str):
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return None, (
@@ -183,7 +205,7 @@ def calculate_report(base_folder: str):
         return None, f"Failed to read the screenshots folder:\n{exc}"
 
     results = []
-    for display_name, key, price in PRICES:
+    for display_name, key, price in get_prices(faction):
         folder = subdirs.get(key)
         count = 0
         if folder is not None:
@@ -197,10 +219,9 @@ def calculate_report(base_folder: str):
 
 
 # ---------------------------------------------------------------------------
-# Create work report:
-#   PNG -> JPG (<=250KB) -> Desktop/<name>/<Category>/... -> zip
+# Create work report
 # ---------------------------------------------------------------------------
-def create_work_report(base_folder: str, game_name: str):
+def create_work_report(base_folder: str, game_name: str, faction: str):
     if not PIL_AVAILABLE:
         return None, None, (
             "The 'Pillow' library is required for this feature but is not "
@@ -233,12 +254,10 @@ def create_work_report(base_folder: str, game_name: str):
         return None, None, f"Failed to read the screenshots folder:\n{exc}"
 
     converted_total = 0
-    processed_categories: list[str] = []
 
-    # Show busy cursor while we work
     QGuiApplication.setOverrideCursor(Qt.WaitCursor)
     try:
-        for display_name, key, _ in PRICES:
+        for display_name, key, _ in get_prices(faction):
             cat = subdirs.get(key)
             if cat is None:
                 continue
@@ -267,8 +286,6 @@ def create_work_report(base_folder: str, game_name: str):
                     return None, None, (
                         f"Failed to process '{png.name}':\n{exc}"
                     )
-
-            processed_categories.append(display_name)
     finally:
         QGuiApplication.restoreOverrideCursor()
 
@@ -278,7 +295,6 @@ def create_work_report(base_folder: str, game_name: str):
             "folders to convert."
         )
 
-    # --- Zip the folder next to it (overwrite if exists) ---
     zip_base = desktop / game_name
     zip_path = Path(f"{zip_base}.zip")
     try:
@@ -301,7 +317,7 @@ def create_work_report(base_folder: str, game_name: str):
 # ---------------------------------------------------------------------------
 # Clear work reports
 # ---------------------------------------------------------------------------
-def clear_work_reports(base_folder: str):
+def clear_work_reports(base_folder: str, faction: str):
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return None, (
@@ -317,7 +333,7 @@ def clear_work_reports(base_folder: str):
     deleted = 0
     errors: list[str] = []
 
-    for display_name, key, _ in PRICES:
+    for display_name, key, _ in get_prices(faction):
         cat = subdirs.get(key)
         if cat is None:
             continue
@@ -424,6 +440,77 @@ class FolderPickerDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Faction picker dialog
+# ---------------------------------------------------------------------------
+class FactionDialog(QDialog):
+    def __init__(self, parent=None, initial: str | None = None):
+        super().__init__(parent)
+        self.faction_value: str | None = None
+        self.setWindowTitle("Select Your Faction")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        self._build_ui(initial)
+
+    def _build_ui(self, initial: str | None) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 22, 22, 22)
+        root.setSpacing(14)
+
+        title = QLabel("Select your faction")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        root.addWidget(title)
+
+        hint = QLabel(
+            "The prices used in the work report depend on your faction. "
+            "You can change this later in Settings."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        root.addWidget(hint)
+
+        self.group = QButtonGroup(self)
+        self.radios: dict[str, QRadioButton] = {}
+
+        for name in FACTIONS.keys():
+            rb = QRadioButton(name)
+            rb.setMinimumHeight(36)
+            rb.setStyleSheet(
+                "QRadioButton { padding: 8px 12px; font-size: 14px; }"
+                "QRadioButton::indicator { width: 16px; height: 16px; }"
+            )
+            if initial == name:
+                rb.setChecked(True)
+            elif initial is None and name == DEFAULT_FACTION:
+                rb.setChecked(True)
+            self.group.addButton(rb)
+            self.radios[name] = rb
+            root.addWidget(rb)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondaryButton")
+        cancel_btn.setMinimumHeight(34)
+        cancel_btn.clicked.connect(self.reject)
+        confirm_btn = QPushButton("Confirm")
+        confirm_btn.setMinimumHeight(34)
+        confirm_btn.setDefault(True)
+        confirm_btn.clicked.connect(self._confirm)
+        btns.addWidget(cancel_btn)
+        btns.addWidget(confirm_btn)
+        root.addLayout(btns)
+
+    def _confirm(self) -> None:
+        for name, rb in self.radios.items():
+            if rb.isChecked():
+                self.faction_value = name
+                self.accept()
+                return
+        QMessageBox.warning(self, "Invalid Selection",
+                            "Please select a faction.")
+
+
+# ---------------------------------------------------------------------------
 # Game-name input dialog
 # ---------------------------------------------------------------------------
 class GameNameDialog(QDialog):
@@ -495,14 +582,15 @@ class GameNameDialog(QDialog):
 # Main Window
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
-    def __init__(self, mta_folder: str, game_name: str | None):
+    def __init__(self, mta_folder: str, game_name: str | None, faction: str):
         super().__init__()
         self.mta_folder = mta_folder
         self.game_name = game_name or ""
+        self.faction = faction
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(960, 760)
-        self.resize(1040, 800)
+        self.setMinimumSize(960, 780)
+        self.resize(1040, 820)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -549,6 +637,10 @@ class MainWindow(QMainWindow):
         act_name.triggered.connect(self.change_name)
         settings_menu.addAction(act_name)
 
+        act_faction = QAction("Change Faction...", self)
+        act_faction.triggered.connect(self.change_faction)
+        settings_menu.addAction(act_faction)
+
         help_menu = menubar.addMenu("Help")
         act_about = QAction(f"About {APP_NAME}", self)
         act_about.triggered.connect(self.show_about)
@@ -558,8 +650,8 @@ class MainWindow(QMainWindow):
     def _create_home_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(60, 50, 60, 50)
-        layout.setSpacing(16)
+        layout.setContentsMargins(60, 40, 60, 40)
+        layout.setSpacing(14)
 
         title = QLabel(APP_NAME)
         title.setAlignment(Qt.AlignCenter)
@@ -573,41 +665,35 @@ class MainWindow(QMainWindow):
         subtitle.setStyleSheet("color: #95a5a6; font-size: 13px;")
         layout.addWidget(subtitle)
 
-        layout.addSpacing(24)
+        layout.addSpacing(18)
 
-        folder_box = QFrame()
-        folder_box.setObjectName("card")
-        fb_layout = QVBoxLayout(folder_box)
-        fb_layout.setContentsMargins(18, 14, 18, 14)
-        fb_layout.setSpacing(4)
-        fb_title = QLabel("Current MTA:SA Folder")
-        fb_title.setStyleSheet(
-            "font-weight: bold; color: #34495e; font-size: 12px;"
-        )
-        self.home_folder_label = QLabel()
-        self.home_folder_label.setWordWrap(True)
-        self.home_folder_label.setStyleSheet("color: #2c3e50; font-size: 13px;")
-        fb_layout.addWidget(fb_title)
-        fb_layout.addWidget(self.home_folder_label)
+        def make_card(title_text):
+            box = QFrame()
+            box.setObjectName("card")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(18, 14, 18, 14)
+            v.setSpacing(4)
+            t = QLabel(title_text)
+            t.setStyleSheet(
+                "font-weight: bold; color: #34495e; font-size: 12px;"
+            )
+            val = QLabel()
+            val.setWordWrap(True)
+            val.setStyleSheet("color: #2c3e50; font-size: 13px;")
+            v.addWidget(t)
+            v.addWidget(val)
+            return box, val
+
+        folder_box, self.home_folder_label = make_card("Current MTA:SA Folder")
         layout.addWidget(folder_box)
 
-        name_box = QFrame()
-        name_box.setObjectName("card")
-        nb_layout = QVBoxLayout(name_box)
-        nb_layout.setContentsMargins(18, 14, 18, 14)
-        nb_layout.setSpacing(4)
-        nb_title = QLabel("Current Game Name")
-        nb_title.setStyleSheet(
-            "font-weight: bold; color: #34495e; font-size: 12px;"
-        )
-        self.home_name_label = QLabel()
-        self.home_name_label.setWordWrap(True)
-        self.home_name_label.setStyleSheet("color: #2c3e50; font-size: 13px;")
-        nb_layout.addWidget(nb_title)
-        nb_layout.addWidget(self.home_name_label)
+        faction_box, self.home_faction_label = make_card("Current Faction")
+        layout.addWidget(faction_box)
+
+        name_box, self.home_name_label = make_card("Current Game Name")
         layout.addWidget(name_box)
 
-        layout.addSpacing(24)
+        layout.addSpacing(18)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(20)
@@ -663,15 +749,11 @@ class MainWindow(QMainWindow):
         info1.setSpacing(6)
         t1 = QLabel("Calculating the work report")
         t1.setStyleSheet("font-size: 16px; font-weight: bold;")
-        d1 = QLabel(
-            "Counts PNG screenshots inside the Arrest, Kill, Shift, TakeGun "
-            "and Wanted folders, and calculates the total earnings for each "
-            "category and for the whole report."
-        )
-        d1.setWordWrap(True)
-        d1.setStyleSheet("color: #6b7c93;")
+        self.calc_desc = QLabel()
+        self.calc_desc.setWordWrap(True)
+        self.calc_desc.setStyleSheet("color: #6b7c93;")
         info1.addWidget(t1)
-        info1.addWidget(d1)
+        info1.addWidget(self.calc_desc)
         c1.addLayout(info1, 1)
         run_btn = QPushButton("Calculate Work Report")
         run_btn.setMinimumHeight(44)
@@ -810,55 +892,43 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
-        card1 = QFrame()
-        card1.setObjectName("card")
-        c1 = QVBoxLayout(card1)
-        c1.setContentsMargins(22, 22, 22, 22)
-        c1.setSpacing(12)
+        def make_setting_card(label_text, button_text, slot):
+            card = QFrame()
+            card.setObjectName("card")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(22, 22, 22, 22)
+            v.setSpacing(12)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("font-weight: bold; color: #34495e;")
+            v.addWidget(lbl)
+            val = QLabel()
+            val.setWordWrap(True)
+            val.setStyleSheet(
+                "color: #2c3e50; background:#f4f6f8; padding:12px;"
+                "border-radius:6px; border: 1px solid #e1e8ed;"
+            )
+            v.addWidget(val)
+            btn = QPushButton(button_text)
+            btn.setMinimumHeight(38)
+            btn.setMinimumWidth(180)
+            btn.clicked.connect(slot)
+            v.addWidget(btn, 0, Qt.AlignLeft)
+            return card, val
 
-        lbl1 = QLabel("MTA:SA Folder")
-        lbl1.setStyleSheet("font-weight: bold; color: #34495e;")
-        c1.addWidget(lbl1)
-
-        self.settings_folder_label = QLabel()
-        self.settings_folder_label.setWordWrap(True)
-        self.settings_folder_label.setStyleSheet(
-            "color: #2c3e50; background:#f4f6f8; padding:12px;"
-            "border-radius:6px; border: 1px solid #e1e8ed;"
+        c1, self.settings_folder_label = make_setting_card(
+            "MTA:SA Folder", "Change Folder...", self.change_folder
         )
-        c1.addWidget(self.settings_folder_label)
+        layout.addWidget(c1)
 
-        change_folder_btn = QPushButton("Change Folder...")
-        change_folder_btn.setMinimumHeight(38)
-        change_folder_btn.setMinimumWidth(180)
-        change_folder_btn.clicked.connect(self.change_folder)
-        c1.addWidget(change_folder_btn, 0, Qt.AlignLeft)
-        layout.addWidget(card1)
-
-        card2 = QFrame()
-        card2.setObjectName("card")
-        c2 = QVBoxLayout(card2)
-        c2.setContentsMargins(22, 22, 22, 22)
-        c2.setSpacing(12)
-
-        lbl2 = QLabel("Game Name")
-        lbl2.setStyleSheet("font-weight: bold; color: #34495e;")
-        c2.addWidget(lbl2)
-
-        self.settings_name_label = QLabel()
-        self.settings_name_label.setWordWrap(True)
-        self.settings_name_label.setStyleSheet(
-            "color: #2c3e50; background:#f4f6f8; padding:12px;"
-            "border-radius:6px; border: 1px solid #e1e8ed;"
+        c2, self.settings_faction_label = make_setting_card(
+            "Faction", "Change Faction...", self.change_faction
         )
-        c2.addWidget(self.settings_name_label)
+        layout.addWidget(c2)
 
-        change_name_btn = QPushButton("Change Game Name...")
-        change_name_btn.setMinimumHeight(38)
-        change_name_btn.setMinimumWidth(180)
-        change_name_btn.clicked.connect(self.change_name)
-        c2.addWidget(change_name_btn, 0, Qt.AlignLeft)
-        layout.addWidget(card2)
+        c3, self.settings_name_label = make_setting_card(
+            "Game Name", "Change Game Name...", self.change_name
+        )
+        layout.addWidget(c3)
 
         layout.addStretch()
         return page
@@ -868,12 +938,22 @@ class MainWindow(QMainWindow):
         self.home_folder_label.setText(self.mta_folder)
         self.settings_folder_label.setText(self.mta_folder)
 
+        self.home_faction_label.setText(self.faction)
+        self.settings_faction_label.setText(self.faction)
+
         name_display = self.game_name if self.game_name else "(not set yet)"
         self.home_name_label.setText(name_display)
         self.settings_name_label.setText(name_display)
 
+        prices = get_prices(self.faction)
+        parts = [f"{name} ${price:,}" for name, _, price in prices]
+        self.calc_desc.setText(
+            f"Faction: {self.faction} — counts PNG screenshots and applies "
+            f"the following prices:\n" + "  •  ".join(parts)
+        )
+
     def run_report(self) -> None:
-        results, error = calculate_report(self.mta_folder)
+        results, error = calculate_report(self.mta_folder, self.faction)
         if error:
             QMessageBox.warning(self, "Report Error", error)
             return
@@ -907,7 +987,10 @@ class MainWindow(QMainWindow):
             total_amount += subtotal
 
         screenshots_dir = Path(self.mta_folder) / "screenshots"
-        self.report_info.setText(f"Screenshots directory:  {screenshots_dir}")
+        self.report_info.setText(
+            f"Faction: {self.faction}      |      "
+            f"Screenshots directory:  {screenshots_dir}"
+        )
         self.summary_label.setText(
             f"Total Screenshots: {total_count:,}      |      "
             f"Total Amount: ${total_amount:,}"
@@ -937,7 +1020,9 @@ class MainWindow(QMainWindow):
         if not name:
             return
 
-        target, zip_path, error = create_work_report(self.mta_folder, name)
+        target, zip_path, error = create_work_report(
+            self.mta_folder, name, self.faction
+        )
 
         if target is None:
             QMessageBox.warning(self, "Create Report Error", error)
@@ -954,8 +1039,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Work Report Created",
             "The work report was created successfully.\n\n"
-            "All PNG screenshots were converted to JPG (max 250 KB each) "
-            "and placed in the categories below.\n\n"
+            f"Faction: {self.faction}\n"
+            "All PNG screenshots were converted to JPG (max 250 KB each).\n\n"
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
         )
@@ -976,8 +1061,7 @@ class MainWindow(QMainWindow):
         confirm.setText("Are you sure?")
         confirm.setInformativeText(
             "This will permanently delete all files inside the category "
-            "folders (Arrest, Kill, Shift, TakeGun, Wanted) and their nested "
-            "same-named folders.\n\n"
+            "folders and their nested same-named folders.\n\n"
             "Folder structure will be preserved, but this action cannot be "
             "undone."
         )
@@ -989,7 +1073,7 @@ class MainWindow(QMainWindow):
         if confirm.clickedButton() is not yes_btn:
             return
 
-        deleted, error = clear_work_reports(self.mta_folder)
+        deleted, error = clear_work_reports(self.mta_folder, self.faction)
 
         if error and deleted == 0:
             QMessageBox.warning(
@@ -1030,6 +1114,25 @@ class MainWindow(QMainWindow):
             "The MTA:SA folder has been updated successfully."
         )
 
+    def change_faction(self) -> None:
+        dlg = FactionDialog(self, self.faction)
+        if dlg.exec() != QDialog.Accepted or not dlg.faction_value:
+            return
+        try:
+            save_faction(dlg.faction_value)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Registry Error",
+                f"Failed to save the faction in the registry:\n{exc}"
+            )
+            return
+        self.faction = dlg.faction_value
+        self._refresh_labels()
+        QMessageBox.information(
+            self, "Saved",
+            f"Faction changed to {self.faction}."
+        )
+
     def change_name(self) -> None:
         dlg = GameNameDialog(self, self.game_name)
         if dlg.exec() != QDialog.Accepted or not dlg.name_value:
@@ -1056,9 +1159,9 @@ class MainWindow(QMainWindow):
             f"<b>{APP_NAME}</b> — v{APP_VERSION}<br>"
             f"<i>Made By {APP_AUTHOR}</i><br><br>"
             "A small utility for MTA:SA players.<br>"
-            "• Stores the MTA:SA folder and the game name in the Windows "
-            "registry.<br>"
-            "• Calculates a work report from the screenshots folder.<br>"
+            "• Stores the MTA:SA folder, faction and game name in the "
+            "Windows registry.<br>"
+            "• Calculates a work report using faction-specific prices.<br>"
             "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
             "a zipped work report on the Desktop.<br>"
             "• Clears all screenshots from the category folders."
@@ -1120,6 +1223,22 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:focus { border: 1px solid #3498db; }
 
+            QRadioButton {
+                color: #2c3e50;
+                spacing: 10px;
+            }
+            QRadioButton::indicator {
+                width: 16px; height: 16px;
+                border: 2px solid #b0bec5;
+                border-radius: 9px;
+                background: white;
+            }
+            QRadioButton::indicator:hover { border-color: #3498db; }
+            QRadioButton::indicator:checked {
+                border: 5px solid #3498db;
+                background: white;
+            }
+
             QFrame#card {
                 background: #ffffff;
                 border: 1px solid #e1e8ed;
@@ -1155,8 +1274,8 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
 
+    # 1) Folder
     folder = get_saved_folder()
-
     if not folder or not Path(folder).is_dir():
         dlg = FolderPickerDialog(None, folder or "")
         if dlg.exec() != QDialog.Accepted or not dlg.selected_path:
@@ -1171,9 +1290,26 @@ def main() -> int:
             return 1
         folder = dlg.selected_path
 
+    # 2) Faction
+    faction = get_saved_faction()
+    if not faction:
+        dlg = FactionDialog(None, None)
+        if dlg.exec() != QDialog.Accepted or not dlg.faction_value:
+            return 0
+        try:
+            save_faction(dlg.faction_value)
+        except OSError as exc:
+            QMessageBox.critical(
+                None, "Registry Error",
+                f"Failed to save the faction in the registry:\n{exc}"
+            )
+            return 1
+        faction = dlg.faction_value
+
+    # 3) Game name (on demand)
     game_name = get_saved_name()
 
-    window = MainWindow(folder, game_name)
+    window = MainWindow(folder, game_name, faction)
     window.show()
     return app.exec()
 
