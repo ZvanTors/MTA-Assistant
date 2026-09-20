@@ -3,18 +3,25 @@ MTA Assistant - v1.0.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
+import io
 import sys
 import shutil
 import winreg
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStandardPaths
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame
 )
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -27,6 +34,8 @@ APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 REG_PATH = r"Software\MTA Assistant"
 REG_VALUE_FOLDER = "MTAFolder"
 REG_VALUE_NAME = "GameName"
+
+MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
 
 PRICES = [
     ("Arrest",  "arrest",  5000),
@@ -102,6 +111,60 @@ def _collect_category_dirs(screenshots_dir: Path) -> dict[str, Path]:
 
 
 # ---------------------------------------------------------------------------
+# Image processing: PNG -> JPG, compressed under MAX_IMAGE_BYTES
+# ---------------------------------------------------------------------------
+def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYTES) -> None:
+    """
+    Convert a PNG to a JPG file whose size is at most `max_bytes`.
+    Strategy: start at high quality, reduce quality step by step; if that's
+    not enough, progressively downscale the image and reset quality.
+    Transparency is flattened onto a white background.
+    """
+    img = Image.open(src_png)
+
+    # Normalize to RGB (flatten transparency on white)
+    if img.mode in ("RGBA", "LA"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode == "P":
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    work = img
+    quality = 92
+
+    while True:
+        buf = io.BytesIO()
+        work.save(buf, format="JPEG", quality=quality, optimize=True)
+        size = buf.tell()
+        if size <= max_bytes:
+            break
+
+        if quality > 50:
+            quality -= 7
+        else:
+            # Downscale and reset quality
+            new_w = max(int(work.width * 0.85), 320)
+            new_h = max(int(work.height * 0.85), 320)
+            if (new_w, new_h) == (work.width, work.height):
+                # Can't shrink further; accept smallest possible
+                buf = io.BytesIO()
+                work.save(buf, format="JPEG", quality=35, optimize=True)
+                break
+            work = work.resize((new_w, new_h), Image.LANCZOS)
+            quality = 85
+
+    dst_jpg.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst_jpg, "wb") as f:
+        f.write(buf.getvalue())
+
+
+# ---------------------------------------------------------------------------
 # Report calculation
 # ---------------------------------------------------------------------------
 def calculate_report(base_folder: str):
@@ -134,15 +197,16 @@ def calculate_report(base_folder: str):
 
 
 # ---------------------------------------------------------------------------
-# Create work report (copy nested folders to Desktop + zip)
+# Create work report:
+#   PNG -> JPG (<=250KB) -> Desktop/<name>/<Category>/... -> zip
 # ---------------------------------------------------------------------------
 def create_work_report(base_folder: str, game_name: str):
-    """
-    Creates  <Desktop>/<game_name>/  with the copied category folders,
-    then compresses it into  <Desktop>/<game_name>.zip  next to it.
+    if not PIL_AVAILABLE:
+        return None, None, (
+            "The 'Pillow' library is required for this feature but is not "
+            "installed.\n\nPlease run:  pip install Pillow"
+        )
 
-    Returns (target_path, zip_path, error).
-    """
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return None, None, (
@@ -168,24 +232,50 @@ def create_work_report(base_folder: str, game_name: str):
     except OSError as exc:
         return None, None, f"Failed to read the screenshots folder:\n{exc}"
 
-    copied: list[str] = []
-    for display_name, key, _ in PRICES:
-        cat = subdirs.get(key)
-        if cat is None:
-            continue
-        nested = _find_nested(cat, key)
-        source = nested if nested is not None else cat
-        dst = target / display_name
-        try:
-            shutil.copytree(source, dst, dirs_exist_ok=True)
-            copied.append(display_name)
-        except OSError as exc:
-            return None, None, f"Failed to copy '{display_name}':\n{exc}"
+    converted_total = 0
+    processed_categories: list[str] = []
 
-    if not copied:
+    # Show busy cursor while we work
+    QGuiApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        for display_name, key, _ in PRICES:
+            cat = subdirs.get(key)
+            if cat is None:
+                continue
+
+            pngs = [
+                f for f in cat.iterdir()
+                if f.is_file() and f.suffix.lower() == ".png"
+            ]
+            if not pngs:
+                continue
+
+            dst_dir = target / display_name
+            try:
+                dst_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return None, None, (
+                    f"Failed to create '{display_name}' folder:\n{exc}"
+                )
+
+            for png in pngs:
+                dst_jpg = dst_dir / (png.stem + ".jpg")
+                try:
+                    compress_to_jpg(png, dst_jpg)
+                    converted_total += 1
+                except Exception as exc:
+                    return None, None, (
+                        f"Failed to process '{png.name}':\n{exc}"
+                    )
+
+            processed_categories.append(display_name)
+    finally:
+        QGuiApplication.restoreOverrideCursor()
+
+    if converted_total == 0:
         return None, None, (
-            "No category folders were found inside the screenshots folder "
-            "to copy."
+            "No PNG screenshots were found inside the first-level category "
+            "folders to convert."
         )
 
     # --- Zip the folder next to it (overwrite if exists) ---
@@ -201,12 +291,54 @@ def create_work_report(base_folder: str, game_name: str):
             base_dir=target.name,
         )
     except OSError as exc:
-        # Folder is safe; only the zip failed.
         return target, None, (
             f"The folder was created successfully, but zipping it failed:\n{exc}"
         )
 
     return target, zip_path, None
+
+
+# ---------------------------------------------------------------------------
+# Clear work reports
+# ---------------------------------------------------------------------------
+def clear_work_reports(base_folder: str):
+    screenshots_dir = Path(base_folder) / "screenshots"
+    if not screenshots_dir.is_dir():
+        return None, (
+            "The 'screenshots' folder was not found at:\n"
+            f"{screenshots_dir}"
+        )
+
+    try:
+        subdirs = _collect_category_dirs(screenshots_dir)
+    except OSError as exc:
+        return None, f"Failed to read the screenshots folder:\n{exc}"
+
+    deleted = 0
+    errors: list[str] = []
+
+    for display_name, key, _ in PRICES:
+        cat = subdirs.get(key)
+        if cat is None:
+            continue
+        try:
+            for item in cat.rglob("*"):
+                if item.is_file():
+                    try:
+                        item.unlink()
+                        deleted += 1
+                    except OSError as exc:
+                        errors.append(f"{item.name}: {exc}")
+        except OSError as exc:
+            errors.append(f"{display_name}: {exc}")
+
+    if errors:
+        summary = "\n".join(errors[:5])
+        if len(errors) > 5:
+            summary += f"\n... and {len(errors) - 5} more errors."
+        return deleted, summary
+
+    return deleted, None
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +446,9 @@ class GameNameDialog(QDialog):
 
         hint = QLabel(
             "A folder with exactly this name will be created on your Desktop, "
-            "the copied category folders will be placed inside it, and the "
-            "folder will then be compressed into a .zip file right next to it. "
-            "Parentheses, uppercase letters and special characters are kept "
-            "exactly as you type them. The name is saved in the registry."
+            "the converted & compressed images will be placed inside it, and "
+            "the folder will then be compressed into a .zip file right next to "
+            "it. The name is saved in the registry."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #6b7c93;")
@@ -370,8 +501,8 @@ class MainWindow(QMainWindow):
         self.game_name = game_name or ""
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(940, 660)
-        self.resize(1020, 700)
+        self.setMinimumSize(960, 760)
+        self.resize(1040, 800)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -402,6 +533,12 @@ class MainWindow(QMainWindow):
         act_create = QAction("Create Work Report", self)
         act_create.triggered.connect(self.create_report_folder)
         tools_menu.addAction(act_create)
+
+        tools_menu.addSeparator()
+
+        act_clear = QAction("Clear Work Reports", self)
+        act_clear.triggered.connect(self.clear_reports)
+        tools_menu.addAction(act_clear)
 
         settings_menu = menubar.addMenu("Settings")
         act_folder = QAction("Change MTA:SA Folder...", self)
@@ -543,7 +680,7 @@ class MainWindow(QMainWindow):
         c1.addWidget(run_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card1)
 
-        # Card 2 — Create report folder + zip
+        # Card 2 — Create
         card2 = QFrame()
         card2.setObjectName("card")
         c2 = QHBoxLayout(card2)
@@ -554,10 +691,10 @@ class MainWindow(QMainWindow):
         t2 = QLabel("Create Work Report")
         t2.setStyleSheet("font-size: 16px; font-weight: bold;")
         d2 = QLabel(
-            "Creates a folder named after your in-game name on the Desktop, "
-            "copies each category's nested same-named folder (with all of its "
-            "contents) inside it, and then automatically compresses the folder "
-            "into a .zip file right next to it."
+            "Converts every PNG screenshot from the category folders into a "
+            "JPG file with a maximum size of 250 KB, places them in a Desktop "
+            "folder named after your in-game name, and finally compresses "
+            "that folder into a .zip file right next to it."
         )
         d2.setWordWrap(True)
         d2.setStyleSheet("color: #6b7c93;")
@@ -570,6 +707,33 @@ class MainWindow(QMainWindow):
         create_btn.clicked.connect(self.create_report_folder)
         c2.addWidget(create_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card2)
+
+        # Card 3 — Clear (DANGER)
+        card3 = QFrame()
+        card3.setObjectName("card")
+        c3 = QHBoxLayout(card3)
+        c3.setContentsMargins(22, 22, 22, 22)
+        c3.setSpacing(20)
+        info3 = QVBoxLayout()
+        info3.setSpacing(6)
+        t3 = QLabel("Clear Work Reports")
+        t3.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
+        d3 = QLabel(
+            "Permanently deletes all files inside the category folders. "
+            "Folder structure is preserved. This action cannot be undone."
+        )
+        d3.setWordWrap(True)
+        d3.setStyleSheet("color: #6b7c93;")
+        info3.addWidget(t3)
+        info3.addWidget(d3)
+        c3.addLayout(info3, 1)
+        clear_btn = QPushButton("Clear Work Reports")
+        clear_btn.setObjectName("dangerButton")
+        clear_btn.setMinimumHeight(44)
+        clear_btn.setMinimumWidth(210)
+        clear_btn.clicked.connect(self.clear_reports)
+        c3.addWidget(clear_btn, 0, Qt.AlignVCenter)
+        layout.addWidget(card3)
 
         layout.addStretch()
         return page
@@ -780,7 +944,6 @@ class MainWindow(QMainWindow):
             return
 
         if zip_path is None:
-            # Folder created, but zip failed.
             QMessageBox.warning(
                 self, "Zip Error",
                 f"The folder was created at:\n{target}\n\n"
@@ -791,8 +954,61 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Work Report Created",
             "The work report was created successfully.\n\n"
+            "All PNG screenshots were converted to JPG (max 250 KB each) "
+            "and placed in the categories below.\n\n"
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
+        )
+
+    def clear_reports(self) -> None:
+        screenshots_dir = Path(self.mta_folder) / "screenshots"
+        if not screenshots_dir.is_dir():
+            QMessageBox.warning(
+                self, "Clear Work Reports",
+                "The 'screenshots' folder was not found at:\n"
+                f"{screenshots_dir}"
+            )
+            return
+
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Warning)
+        confirm.setWindowTitle("Confirm Deletion")
+        confirm.setText("Are you sure?")
+        confirm.setInformativeText(
+            "This will permanently delete all files inside the category "
+            "folders (Arrest, Kill, Shift, TakeGun, Wanted) and their nested "
+            "same-named folders.\n\n"
+            "Folder structure will be preserved, but this action cannot be "
+            "undone."
+        )
+        yes_btn = confirm.addButton("Yes, delete", QMessageBox.YesRole)
+        no_btn = confirm.addButton("No, cancel", QMessageBox.NoRole)
+        confirm.setDefaultButton(no_btn)
+        confirm.exec()
+
+        if confirm.clickedButton() is not yes_btn:
+            return
+
+        deleted, error = clear_work_reports(self.mta_folder)
+
+        if error and deleted == 0:
+            QMessageBox.warning(
+                self, "Clear Work Reports",
+                f"Deletion failed:\n{error}"
+            )
+            return
+
+        if error:
+            QMessageBox.warning(
+                self, "Partially Completed",
+                f"Deleted {deleted} file(s), but some errors occurred:\n\n"
+                f"{error}"
+            )
+            return
+
+        QMessageBox.information(
+            self, "Clear Work Reports",
+            f"Done. {deleted} file(s) were deleted successfully."
         )
 
     def change_folder(self) -> None:
@@ -843,9 +1059,9 @@ class MainWindow(QMainWindow):
             "• Stores the MTA:SA folder and the game name in the Windows "
             "registry.<br>"
             "• Calculates a work report from the screenshots folder.<br>"
-            "• Creates a Desktop folder named after your in-game name, "
-            "copies the nested category folders into it, and automatically "
-            "compresses it into a .zip file."
+            "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
+            "a zipped work report on the Desktop.<br>"
+            "• Clears all screenshots from the category folders."
         )
 
     # ---------------- Style ----------------
@@ -886,6 +1102,14 @@ class MainWindow(QMainWindow):
                 font-weight: 500;
             }
             QPushButton#backButton:hover { background: #dfe4e6; }
+
+            QPushButton#dangerButton {
+                background: #e74c3c;
+                color: white;
+            }
+            QPushButton#dangerButton:hover { background: #c0392b; }
+            QPushButton#dangerButton:pressed { background: #a93226; }
+            QPushButton#dangerButton:disabled { background: #e6b0aa; }
 
             QLineEdit {
                 background: #ffffff;
