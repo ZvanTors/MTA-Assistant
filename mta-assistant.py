@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.2.0  ( Made By AmooReza )
+MTA Assistant - v1.3.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -53,6 +53,14 @@ FACTIONS = {
         ("Wanted",  "wanted",  2000),
         ("TakeGun", "takegun", 2000),
         ("Kill",    "kill",    4000),
+    ],
+    "Police Department": [
+        ("Wanted",  "wanted",  2000),
+        ("Kill",    "kill",    1000),
+        ("Arrest",  "arrest",  6000),
+        ("Shift",   "shift",   8000),
+        ("TakeGun", "takegun", 3000),
+        ("Ticket",  "ticket",  10000),
     ],
 }
 
@@ -98,6 +106,7 @@ def save_name(name: str) -> None:
 
 def get_saved_faction() -> str | None:
     value = _read_value(REG_VALUE_FACTION)
+    # Backward-compatibility: old value "Federal" now maps to "Police Federal"
     if value == "Federal":
         return "Police Federal"
     if value and value in FACTIONS:
@@ -241,10 +250,6 @@ class ConvertWorker(QThread):
     """
     Runs the PNG -> JPG conversion + zip in a background thread so the UI
     stays responsive.
-    Signals:
-        progress(done, total)
-        finished_ok(target_path, zip_path)
-        failed(error_message)
     """
     progress = Signal(int, int)
     finished_ok = Signal(str, str)
@@ -325,7 +330,7 @@ class ConvertWorker(QThread):
 
             cat = subdirs.get(key)
             if cat is None:
-                continue
+                continue  # Empty / missing source folder — no error
 
             try:
                 pngs = [
@@ -1156,12 +1161,10 @@ class MainWindow(QMainWindow):
         self._convert_dialog.exec()
 
     def _on_convert_finished(self, target: str, zip_path: str) -> None:
-        # Close the progress dialog
         if self._convert_dialog is not None:
             self._convert_dialog.accept()
             self._convert_dialog = None
 
-        # Clean up worker
         if self._convert_worker is not None:
             self._convert_worker.wait()
             self._convert_worker = None
