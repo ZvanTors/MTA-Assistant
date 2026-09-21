@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.3.0  ( Made By AmooReza )
+MTA Assistant - v1.4.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -36,9 +36,11 @@ REG_PATH = r"Software\MTA Assistant"
 REG_VALUE_FOLDER = "MTAFolder"
 REG_VALUE_NAME = "GameName"
 REG_VALUE_FACTION = "Faction"
+REG_VALUE_RANK = "Rank"
 
 MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
 
+# --- Static factions (fixed prices per category) ---
 FACTIONS = {
     "Police Federal": [
         ("Arrest",  "arrest",  5000),
@@ -64,11 +66,35 @@ FACTIONS = {
     ],
 }
 
+# --- Rank-based factions (prices depend on rank) ---
+MEDIC_RANKS = {
+    "Rank 1": [("Heal", "heal", 6300), ("Service", "service", 5000)],
+    "Rank 2": [("Heal", "heal", 7000), ("Service", "service", 6000)],
+    "Rank 3": [("Heal", "heal", 8000), ("Service", "service", 6000)],
+    "Rank 4": [("Heal", "heal", 9500), ("Service", "service", 7500)],
+    "Rank 5": [("Heal", "heal", 11000), ("Service", "service", 9000)],
+}
+
+RANK_BASED_FACTIONS = {
+    "Medic": MEDIC_RANKS,
+}
+
+ALL_FACTION_NAMES = list(FACTIONS.keys()) + list(RANK_BASED_FACTIONS.keys())
+
 DEFAULT_FACTION = "Police Federal"
+DEFAULT_RANK = "Rank 1"
 
 
-def get_prices(faction: str):
+def get_prices(faction: str, rank: str | None = None):
+    if faction in RANK_BASED_FACTIONS:
+        ranks = RANK_BASED_FACTIONS[faction]
+        r = rank if rank in ranks else next(iter(ranks.keys()))
+        return ranks[r]
     return FACTIONS.get(faction, FACTIONS[DEFAULT_FACTION])
+
+
+def faction_requires_rank(faction: str) -> bool:
+    return faction in RANK_BASED_FACTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -106,16 +132,26 @@ def save_name(name: str) -> None:
 
 def get_saved_faction() -> str | None:
     value = _read_value(REG_VALUE_FACTION)
-    # Backward-compatibility: old value "Federal" now maps to "Police Federal"
     if value == "Federal":
         return "Police Federal"
-    if value and value in FACTIONS:
+    if value and value in ALL_FACTION_NAMES:
         return value
     return None
 
 
 def save_faction(faction: str) -> None:
     _write_value(REG_VALUE_FACTION, faction)
+
+
+def get_saved_rank() -> str | None:
+    value = _read_value(REG_VALUE_RANK)
+    if value and value in MEDIC_RANKS:
+        return value
+    return None
+
+
+def save_rank(rank: str) -> None:
+    _write_value(REG_VALUE_RANK, rank)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +233,7 @@ def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYT
 # ---------------------------------------------------------------------------
 # Report calculation
 # ---------------------------------------------------------------------------
-def calculate_report(base_folder: str, faction: str):
+def calculate_report(base_folder: str, faction: str, rank: str | None = None):
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return None, (
@@ -213,7 +249,7 @@ def calculate_report(base_folder: str, faction: str):
         return None, f"Failed to read the screenshots folder:\n{exc}"
 
     results = []
-    for display_name, key, price in get_prices(faction):
+    for display_name, key, price in get_prices(faction, rank):
         folder = subdirs.get(key)
         count = 0
         if folder is not None:
@@ -226,8 +262,7 @@ def calculate_report(base_folder: str, faction: str):
     return results, None
 
 
-def count_total_pngs(base_folder: str, faction: str) -> int:
-    """Fast pre-count of PNGs in the first-level category folders."""
+def count_total_pngs(base_folder: str, faction: str, rank: str | None = None) -> int:
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return 0
@@ -236,7 +271,7 @@ def count_total_pngs(base_folder: str, faction: str) -> int:
     except OSError:
         return 0
     total = 0
-    for _, key, _ in get_prices(faction):
+    for _, key, _ in get_prices(faction, rank):
         cat = subdirs.get(key)
         if cat is not None:
             total += _count_pngs(cat)
@@ -247,19 +282,17 @@ def count_total_pngs(base_folder: str, faction: str) -> int:
 # Convert worker thread
 # ---------------------------------------------------------------------------
 class ConvertWorker(QThread):
-    """
-    Runs the PNG -> JPG conversion + zip in a background thread so the UI
-    stays responsive.
-    """
     progress = Signal(int, int)
     finished_ok = Signal(str, str)
     failed = Signal(str)
 
-    def __init__(self, base_folder: str, game_name: str, faction: str, parent=None):
+    def __init__(self, base_folder: str, game_name: str, faction: str,
+                 rank: str | None = None, parent=None):
         super().__init__(parent)
         self.base_folder = base_folder
         self.game_name = game_name
         self.faction = faction
+        self.rank = rank
 
     def run(self) -> None:
         if not PIL_AVAILABLE:
@@ -283,9 +316,8 @@ class ConvertWorker(QThread):
             self.failed.emit(f"Failed to read the screenshots folder:\n{exc}")
             return
 
-        # Count total PNGs
         total = 0
-        for _, key, _ in get_prices(self.faction):
+        for _, key, _ in get_prices(self.faction, self.rank):
             cat = subdirs.get(key)
             if cat is not None:
                 total += _count_pngs(cat)
@@ -299,7 +331,6 @@ class ConvertWorker(QThread):
 
         self.progress.emit(0, total)
 
-        # Desktop path
         desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
         if not desktop_path:
             self.failed.emit("Could not determine the Desktop folder location.")
@@ -317,8 +348,7 @@ class ConvertWorker(QThread):
             return
 
         done = 0
-        for display_name, key, _ in get_prices(self.faction):
-            # Create every category folder, even empty ones
+        for display_name, key, _ in get_prices(self.faction, self.rank):
             dst_dir = target / display_name
             try:
                 dst_dir.mkdir(parents=True, exist_ok=True)
@@ -330,7 +360,7 @@ class ConvertWorker(QThread):
 
             cat = subdirs.get(key)
             if cat is None:
-                continue  # Empty / missing source folder — no error
+                continue
 
             try:
                 pngs = [
@@ -352,7 +382,6 @@ class ConvertWorker(QThread):
                 done += 1
                 self.progress.emit(done, total)
 
-        # Zip
         zip_base = desktop / self.game_name
         zip_path = Path(f"{zip_base}.zip")
         try:
@@ -377,7 +406,7 @@ class ConvertWorker(QThread):
 # ---------------------------------------------------------------------------
 # Clear work reports
 # ---------------------------------------------------------------------------
-def clear_work_reports(base_folder: str, faction: str):
+def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return None, (
@@ -393,7 +422,7 @@ def clear_work_reports(base_folder: str, faction: str):
     deleted = 0
     errors: list[str] = []
 
-    for display_name, key, _ in get_prices(faction):
+    for display_name, key, _ in get_prices(faction, rank):
         cat = subdirs.get(key)
         if cat is None:
             continue
@@ -531,8 +560,11 @@ class FactionDialog(QDialog):
         self.group = QButtonGroup(self)
         self.radios: dict[str, QRadioButton] = {}
 
-        for name in FACTIONS.keys():
-            rb = QRadioButton(name)
+        for name in ALL_FACTION_NAMES:
+            label = name
+            if faction_requires_rank(name):
+                label = f"{name}  (rank-based)"
+            rb = QRadioButton(label)
             rb.setMinimumHeight(36)
             rb.setStyleSheet(
                 "QRadioButton { padding: 8px 12px; font-size: 14px; }"
@@ -568,6 +600,85 @@ class FactionDialog(QDialog):
                 return
         QMessageBox.warning(self, "Invalid Selection",
                             "Please select a faction.")
+
+
+# ---------------------------------------------------------------------------
+# Rank picker dialog (for rank-based factions)
+# ---------------------------------------------------------------------------
+class RankDialog(QDialog):
+    def __init__(self, parent=None, faction: str = "Medic",
+                 initial: str | None = None):
+        super().__init__(parent)
+        self.rank_value: str | None = None
+        self.faction_name = faction
+        self.setWindowTitle(f"Select Your {faction} Rank")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self._build_ui(initial)
+
+    def _build_ui(self, initial: str | None) -> None:
+        ranks = RANK_BASED_FACTIONS.get(self.faction_name, {})
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 22, 22, 22)
+        root.setSpacing(14)
+
+        title = QLabel(f"Select your {self.faction_name} rank")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        root.addWidget(title)
+
+        hint = QLabel(
+            "Prices depend on your rank. You can change this later in "
+            "Settings."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        root.addWidget(hint)
+
+        self.group = QButtonGroup(self)
+        self.radios: dict[str, QRadioButton] = {}
+
+        first_rank = next(iter(ranks.keys()), None)
+
+        for rank_name, prices in ranks.items():
+            price_str = "  |  ".join(f"{n} ${p:,}" for n, _, p in prices)
+            label = f"{rank_name}   —   {price_str}"
+            rb = QRadioButton(label)
+            rb.setMinimumHeight(38)
+            rb.setStyleSheet(
+                "QRadioButton { padding: 8px 12px; font-size: 13px; }"
+                "QRadioButton::indicator { width: 16px; height: 16px; }"
+            )
+            if initial == rank_name:
+                rb.setChecked(True)
+            elif initial is None and rank_name == first_rank:
+                rb.setChecked(True)
+            self.group.addButton(rb)
+            self.radios[rank_name] = rb
+            root.addWidget(rb)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondaryButton")
+        cancel_btn.setMinimumHeight(34)
+        cancel_btn.clicked.connect(self.reject)
+        confirm_btn = QPushButton("Confirm")
+        confirm_btn.setMinimumHeight(34)
+        confirm_btn.setDefault(True)
+        confirm_btn.clicked.connect(self._confirm)
+        btns.addWidget(cancel_btn)
+        btns.addWidget(confirm_btn)
+        root.addLayout(btns)
+
+    def _confirm(self) -> None:
+        for name, rb in self.radios.items():
+            if rb.isChecked():
+                self.rank_value = name
+                self.accept()
+                return
+        QMessageBox.warning(self, "Invalid Selection",
+                            "Please select a rank.")
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +758,6 @@ class ProgressDialog(QDialog):
         self.setWindowTitle("Creating Work Report")
         self.setModal(True)
         self.setMinimumWidth(460)
-        # Prevent closing while the worker is running
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
 
         root = QVBoxLayout(self)
@@ -687,18 +797,20 @@ class ProgressDialog(QDialog):
 # Main Window
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
-    def __init__(self, mta_folder: str, game_name: str | None, faction: str):
+    def __init__(self, mta_folder: str, game_name: str | None,
+                 faction: str, rank: str | None):
         super().__init__()
         self.mta_folder = mta_folder
         self.game_name = game_name or ""
         self.faction = faction
+        self.rank = rank or DEFAULT_RANK
 
         self._convert_worker: ConvertWorker | None = None
         self._convert_dialog: ProgressDialog | None = None
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(960, 780)
-        self.resize(1040, 820)
+        self.setMinimumSize(960, 820)
+        self.resize(1040, 860)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -749,6 +861,10 @@ class MainWindow(QMainWindow):
         act_faction.triggered.connect(self.change_faction)
         settings_menu.addAction(act_faction)
 
+        self.act_rank = QAction("Change Rank...", self)
+        self.act_rank.triggered.connect(self.change_rank)
+        settings_menu.addAction(self.act_rank)
+
         help_menu = menubar.addMenu("Help")
         act_about = QAction(f"About {APP_NAME}", self)
         act_about.triggered.connect(self.show_about)
@@ -759,7 +875,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(60, 40, 60, 40)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         title = QLabel(APP_NAME)
         title.setAlignment(Qt.AlignCenter)
@@ -773,7 +889,7 @@ class MainWindow(QMainWindow):
         subtitle.setStyleSheet("color: #95a5a6; font-size: 13px;")
         layout.addWidget(subtitle)
 
-        layout.addSpacing(18)
+        layout.addSpacing(16)
 
         def make_card(title_text):
             box = QFrame()
@@ -792,16 +908,27 @@ class MainWindow(QMainWindow):
             v.addWidget(val)
             return box, val
 
-        folder_box, self.home_folder_label = make_card("Current MTA:SA Folder")
-        layout.addWidget(folder_box)
+        self.home_folder_card, self.home_folder_label = make_card(
+            "Current MTA:SA Folder"
+        )
+        layout.addWidget(self.home_folder_card)
 
-        faction_box, self.home_faction_label = make_card("Current Faction")
-        layout.addWidget(faction_box)
+        self.home_faction_card, self.home_faction_label = make_card(
+            "Current Faction"
+        )
+        layout.addWidget(self.home_faction_card)
 
-        name_box, self.home_name_label = make_card("Current Game Name")
-        layout.addWidget(name_box)
+        self.home_rank_card, self.home_rank_label = make_card(
+            "Current Rank"
+        )
+        layout.addWidget(self.home_rank_card)
 
-        layout.addSpacing(18)
+        self.home_name_card, self.home_name_label = make_card(
+            "Current Game Name"
+        )
+        layout.addWidget(self.home_name_card)
+
+        layout.addSpacing(16)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(20)
@@ -1023,20 +1150,25 @@ class MainWindow(QMainWindow):
             v.addWidget(btn, 0, Qt.AlignLeft)
             return card, val
 
-        c1, self.settings_folder_label = make_setting_card(
+        self.settings_folder_card, self.settings_folder_label = make_setting_card(
             "MTA:SA Folder", "Change Folder...", self.change_folder
         )
-        layout.addWidget(c1)
+        layout.addWidget(self.settings_folder_card)
 
-        c2, self.settings_faction_label = make_setting_card(
+        self.settings_faction_card, self.settings_faction_label = make_setting_card(
             "Faction", "Change Faction...", self.change_faction
         )
-        layout.addWidget(c2)
+        layout.addWidget(self.settings_faction_card)
 
-        c3, self.settings_name_label = make_setting_card(
+        self.settings_rank_card, self.settings_rank_label = make_setting_card(
+            "Rank", "Change Rank...", self.change_rank
+        )
+        layout.addWidget(self.settings_rank_card)
+
+        self.settings_name_card, self.settings_name_label = make_setting_card(
             "Game Name", "Change Game Name...", self.change_name
         )
-        layout.addWidget(c3)
+        layout.addWidget(self.settings_name_card)
 
         layout.addStretch()
         return page
@@ -1049,19 +1181,36 @@ class MainWindow(QMainWindow):
         self.home_faction_label.setText(self.faction)
         self.settings_faction_label.setText(self.faction)
 
+        is_ranked = faction_requires_rank(self.faction)
+
+        self.home_rank_card.setVisible(is_ranked)
+        self.settings_rank_card.setVisible(is_ranked)
+        self.act_rank.setEnabled(is_ranked)
+
+        if is_ranked:
+            self.home_rank_label.setText(self.rank)
+            self.settings_rank_label.setText(self.rank)
+
         name_display = self.game_name if self.game_name else "(not set yet)"
         self.home_name_label.setText(name_display)
         self.settings_name_label.setText(name_display)
 
-        prices = get_prices(self.faction)
+        prices = get_prices(self.faction, self.rank)
         parts = [f"{name} ${price:,}" for name, _, price in prices]
+
+        header = f"Faction: {self.faction}"
+        if is_ranked:
+            header += f" ({self.rank})"
+
         self.calc_desc.setText(
-            f"Faction: {self.faction} — counts PNG screenshots and applies "
-            f"the following prices:\n" + "  •  ".join(parts)
+            f"{header} — counts PNG screenshots and applies the following "
+            f"prices:\n" + "  •  ".join(parts)
         )
 
     def run_report(self) -> None:
-        results, error = calculate_report(self.mta_folder, self.faction)
+        results, error = calculate_report(
+            self.mta_folder, self.faction, self.rank
+        )
         if error:
             QMessageBox.warning(self, "Report Error", error)
             return
@@ -1095,8 +1244,11 @@ class MainWindow(QMainWindow):
             total_amount += subtotal
 
         screenshots_dir = Path(self.mta_folder) / "screenshots"
+        faction_display = self.faction
+        if faction_requires_rank(self.faction):
+            faction_display = f"{self.faction} ({self.rank})"
         self.report_info.setText(
-            f"Faction: {self.faction}      |      "
+            f"Faction: {faction_display}      |      "
             f"Screenshots directory:  {screenshots_dir}"
         )
         self.summary_label.setText(
@@ -1136,8 +1288,7 @@ class MainWindow(QMainWindow):
         if not name:
             return
 
-        # Fast pre-count so we can size the progress bar correctly
-        total = count_total_pngs(self.mta_folder, self.faction)
+        total = count_total_pngs(self.mta_folder, self.faction, self.rank)
         if total == 0:
             QMessageBox.warning(
                 self, "Create Report Error",
@@ -1146,11 +1297,11 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Progress dialog
         self._convert_dialog = ProgressDialog(self, total)
 
-        # Worker
-        worker = ConvertWorker(self.mta_folder, name, self.faction, self)
+        worker = ConvertWorker(
+            self.mta_folder, name, self.faction, self.rank, self
+        )
         self._convert_worker = worker
 
         worker.progress.connect(self._convert_dialog.update_progress)
@@ -1169,10 +1320,14 @@ class MainWindow(QMainWindow):
             self._convert_worker.wait()
             self._convert_worker = None
 
+        faction_display = self.faction
+        if faction_requires_rank(self.faction):
+            faction_display = f"{self.faction} ({self.rank})"
+
         QMessageBox.information(
             self, "Work Report Created",
             "The work report was created successfully.\n\n"
-            f"Faction: {self.faction}\n"
+            f"Faction: {faction_display}\n"
             "All PNG screenshots were converted to JPG (max 250 KB each).\n\n"
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
@@ -1217,7 +1372,9 @@ class MainWindow(QMainWindow):
         if confirm.clickedButton() is not yes_btn:
             return
 
-        deleted, error = clear_work_reports(self.mta_folder, self.faction)
+        deleted, error = clear_work_reports(
+            self.mta_folder, self.faction, self.rank
+        )
 
         if error and deleted == 0:
             QMessageBox.warning(
@@ -1262,19 +1419,72 @@ class MainWindow(QMainWindow):
         dlg = FactionDialog(self, self.faction)
         if dlg.exec() != QDialog.Accepted or not dlg.faction_value:
             return
+
+        new_faction = dlg.faction_value
         try:
-            save_faction(dlg.faction_value)
+            save_faction(new_faction)
         except OSError as exc:
             QMessageBox.critical(
                 self, "Registry Error",
                 f"Failed to save the faction in the registry:\n{exc}"
             )
             return
-        self.faction = dlg.faction_value
+        self.faction = new_faction
+
+        # If new faction requires a rank, ask for it
+        if faction_requires_rank(new_faction):
+            rank_dlg = RankDialog(self, new_faction, self.rank)
+            if rank_dlg.exec() == QDialog.Accepted and rank_dlg.rank_value:
+                try:
+                    save_rank(rank_dlg.rank_value)
+                except OSError as exc:
+                    QMessageBox.critical(
+                        self, "Registry Error",
+                        f"Failed to save the rank in the registry:\n{exc}"
+                    )
+                    return
+                self.rank = rank_dlg.rank_value
+            else:
+                # User cancelled — keep existing rank (or default)
+                if not self.rank:
+                    self.rank = DEFAULT_RANK
+                    try:
+                        save_rank(self.rank)
+                    except OSError:
+                        pass
+
         self._refresh_labels()
         QMessageBox.information(
             self, "Saved",
             f"Faction changed to {self.faction}."
+        )
+
+    def change_rank(self) -> None:
+        if not faction_requires_rank(self.faction):
+            QMessageBox.information(
+                self, "Rank",
+                "The current faction does not use ranks.\n"
+                "Ranks are only available for rank-based factions such as "
+                "Medic."
+            )
+            return
+
+        dlg = RankDialog(self, self.faction, self.rank)
+        if dlg.exec() != QDialog.Accepted or not dlg.rank_value:
+            return
+        try:
+            save_rank(dlg.rank_value)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Registry Error",
+                f"Failed to save the rank in the registry:\n{exc}"
+            )
+            return
+        self.rank = dlg.rank_value
+        self._refresh_labels()
+        QMessageBox.information(
+            self, "Saved",
+            f"Rank changed to {self.rank}."
         )
 
     def change_name(self) -> None:
@@ -1303,9 +1513,10 @@ class MainWindow(QMainWindow):
             f"<b>{APP_NAME}</b> — v{APP_VERSION}<br>"
             f"<i>Made By {APP_AUTHOR}</i><br><br>"
             "A small utility for MTA:SA players.<br>"
-            "• Stores the MTA:SA folder, faction and game name in the "
+            "• Stores the MTA:SA folder, faction, rank and game name in the "
             "Windows registry.<br>"
-            "• Calculates a work report using faction-specific prices.<br>"
+            "• Calculates a work report using faction- and rank-specific "
+            "prices.<br>"
             "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
             "a zipped work report on the Desktop.<br>"
             "• Clears all screenshots from the category folders."
@@ -1323,6 +1534,7 @@ class MainWindow(QMainWindow):
             QMenu { background: #ffffff; border: 1px solid #e1e8ed; padding: 4px; }
             QMenu::item { padding: 6px 22px; border-radius: 4px; }
             QMenu::item:selected { background: #eaf4fc; }
+            QMenu::item:disabled { color: #b0bec5; }
 
             QPushButton {
                 background: #3498db;
@@ -1464,10 +1676,26 @@ def main() -> int:
             return 1
         faction = dlg.faction_value
 
-    # 3) Game name (on demand)
+    # 3) Rank (only for rank-based factions, only if not already saved)
+    rank = get_saved_rank()
+    if faction_requires_rank(faction) and not rank:
+        dlg = RankDialog(None, faction, None)
+        if dlg.exec() != QDialog.Accepted or not dlg.rank_value:
+            return 0
+        try:
+            save_rank(dlg.rank_value)
+        except OSError as exc:
+            QMessageBox.critical(
+                None, "Registry Error",
+                f"Failed to save the rank in the registry:\n{exc}"
+            )
+            return 1
+        rank = dlg.rank_value
+
+    # 4) Game name (on demand)
     game_name = get_saved_name()
 
-    window = MainWindow(folder, game_name, faction)
+    window = MainWindow(folder, game_name, faction, rank)
     window.show()
     return app.exec()
 
