@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.5.0  ( Made By AmooReza )
+MTA Assistant - v1.6.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -10,7 +10,7 @@ import winreg
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -83,9 +83,20 @@ HITMAN_RANKS = {
     "Rank 5": [("Contract", "contract", 45000)],
 }
 
+# Taxi is a hybrid: Shift has a fixed price ($7,500) for all ranks,
+# while Service changes with rank.
+TAXI_RANKS = {
+    "Rank 1": [("Shift", "shift", 7500), ("Service", "service", 6000)],
+    "Rank 2": [("Shift", "shift", 7500), ("Service", "service", 8500)],
+    "Rank 3": [("Shift", "shift", 7500), ("Service", "service", 10600)],
+    "Rank 4": [("Shift", "shift", 7500), ("Service", "service", 13300)],
+    "Rank 5": [("Shift", "shift", 7500), ("Service", "service", 15000)],
+}
+
 RANK_BASED_FACTIONS = {
     "Medic": MEDIC_RANKS,
     "Hitman Agency": HITMAN_RANKS,
+    "Taxi": TAXI_RANKS,
 }
 
 ALL_FACTION_NAMES = list(FACTIONS.keys()) + list(RANK_BASED_FACTIONS.keys())
@@ -104,6 +115,20 @@ def get_prices(faction: str, rank: str | None = None):
 
 def faction_requires_rank(faction: str) -> bool:
     return faction in RANK_BASED_FACTIONS
+
+
+# ---------------------------------------------------------------------------
+# Resource path helper (works both as script and as frozen exe)
+# ---------------------------------------------------------------------------
+def resource_path(relative: str) -> Path:
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        p = Path(base) / relative
+        if p.exists():
+            return p
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / relative
+    return Path(__file__).parent / relative
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +179,6 @@ def save_faction(faction: str) -> None:
 
 def get_saved_rank() -> str | None:
     value = _read_value(REG_VALUE_RANK)
-    # Rank names are the same across rank-based factions
     if value and value in MEDIC_RANKS:
         return value
     return None
@@ -1441,7 +1465,6 @@ class MainWindow(QMainWindow):
             return
         self.faction = new_faction
 
-        # If new faction requires a rank, ask for it
         if faction_requires_rank(new_faction):
             rank_dlg = RankDialog(self, new_faction, self.rank)
             if rank_dlg.exec() == QDialog.Accepted and rank_dlg.rank_value:
@@ -1455,7 +1478,6 @@ class MainWindow(QMainWindow):
                     return
                 self.rank = rank_dlg.rank_value
             else:
-                # User cancelled — keep existing rank (or default)
                 if not self.rank:
                     self.rank = DEFAULT_RANK
                     try:
@@ -1475,7 +1497,7 @@ class MainWindow(QMainWindow):
                 self, "Rank",
                 "The current faction does not use ranks.\n"
                 "Ranks are only available for rank-based factions such as "
-                "Medic or Hitman Agency."
+                "Medic, Hitman Agency or Taxi."
             )
             return
 
@@ -1654,6 +1676,10 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
 
+    icon_path = resource_path("logo.ico")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+
     # 1) Folder
     folder = get_saved_folder()
     if not folder or not Path(folder).is_dir():
@@ -1706,6 +1732,8 @@ def main() -> int:
     game_name = get_saved_name()
 
     window = MainWindow(folder, game_name, faction, rank)
+    if icon_path.exists():
+        window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
     return app.exec()
 
