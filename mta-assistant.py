@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.4.0  ( Made By AmooReza )
+MTA Assistant - v1.5.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -75,8 +75,17 @@ MEDIC_RANKS = {
     "Rank 5": [("Heal", "heal", 11000), ("Service", "service", 9000)],
 }
 
+HITMAN_RANKS = {
+    "Rank 1": [("Contract", "contract", 15000)],
+    "Rank 2": [("Contract", "contract", 20000)],
+    "Rank 3": [("Contract", "contract", 30000)],
+    "Rank 4": [("Contract", "contract", 35000)],
+    "Rank 5": [("Contract", "contract", 45000)],
+}
+
 RANK_BASED_FACTIONS = {
     "Medic": MEDIC_RANKS,
+    "Hitman Agency": HITMAN_RANKS,
 }
 
 ALL_FACTION_NAMES = list(FACTIONS.keys()) + list(RANK_BASED_FACTIONS.keys())
@@ -145,6 +154,7 @@ def save_faction(faction: str) -> None:
 
 def get_saved_rank() -> str | None:
     value = _read_value(REG_VALUE_RANK)
+    # Rank names are the same across rank-based factions
     if value and value in MEDIC_RANKS:
         return value
     return None
@@ -1465,7 +1475,7 @@ class MainWindow(QMainWindow):
                 self, "Rank",
                 "The current faction does not use ranks.\n"
                 "Ranks are only available for rank-based factions such as "
-                "Medic."
+                "Medic or Hitman Agency."
             )
             return
 
