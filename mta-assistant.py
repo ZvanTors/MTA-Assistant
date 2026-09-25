@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.6.0  ( Made By AmooReza )
+MTA Assistant - v1.7.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -83,8 +83,7 @@ HITMAN_RANKS = {
     "Rank 5": [("Contract", "contract", 45000)],
 }
 
-# Taxi is a hybrid: Shift has a fixed price ($7,500) for all ranks,
-# while Service changes with rank.
+# Taxi: Shift is fixed across all ranks, Service varies.
 TAXI_RANKS = {
     "Rank 1": [("Shift", "shift", 7500), ("Service", "service", 6000)],
     "Rank 2": [("Shift", "shift", 7500), ("Service", "service", 8500)],
@@ -93,10 +92,20 @@ TAXI_RANKS = {
     "Rank 5": [("Shift", "shift", 7500), ("Service", "service", 15000)],
 }
 
+# New Reporter: SP is fixed across all ranks, Day / Night vary.
+NEW_REPORTER_RANKS = {
+    "Rank 1": [("SP", "sp", 25000), ("Day", "day", 9000),  ("Night", "night", 4000)],
+    "Rank 2": [("SP", "sp", 25000), ("Day", "day", 1000),  ("Night", "night", 4000)],
+    "Rank 3": [("SP", "sp", 25000), ("Day", "day", 12000), ("Night", "night", 5000)],
+    "Rank 4": [("SP", "sp", 25000), ("Day", "day", 14000), ("Night", "night", 5000)],
+    "Rank 5": [("SP", "sp", 25000), ("Day", "day", 15000), ("Night", "night", 6000)],
+}
+
 RANK_BASED_FACTIONS = {
     "Medic": MEDIC_RANKS,
     "Hitman Agency": HITMAN_RANKS,
     "Taxi": TAXI_RANKS,
+    "New Reporter": NEW_REPORTER_RANKS,
 }
 
 ALL_FACTION_NAMES = list(FACTIONS.keys()) + list(RANK_BASED_FACTIONS.keys())
@@ -118,7 +127,7 @@ def faction_requires_rank(faction: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Resource path helper (works both as script and as frozen exe)
+# Resource path helper
 # ---------------------------------------------------------------------------
 def resource_path(relative: str) -> Path:
     base = getattr(sys, "_MEIPASS", None)
@@ -647,7 +656,7 @@ class RankDialog(QDialog):
         self.faction_name = faction
         self.setWindowTitle(f"Select Your {faction} Rank")
         self.setModal(True)
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(620)
         self._build_ui(initial)
 
     def _build_ui(self, initial: str | None) -> None:
@@ -1497,7 +1506,7 @@ class MainWindow(QMainWindow):
                 self, "Rank",
                 "The current faction does not use ranks.\n"
                 "Ranks are only available for rank-based factions such as "
-                "Medic, Hitman Agency or Taxi."
+                "Medic, Hitman Agency, Taxi or New Reporter."
             )
             return
 
