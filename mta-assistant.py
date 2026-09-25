@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.7.0  ( Made By AmooReza )
+MTA Assistant - v1.8.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -83,7 +83,6 @@ HITMAN_RANKS = {
     "Rank 5": [("Contract", "contract", 45000)],
 }
 
-# Taxi: Shift is fixed across all ranks, Service varies.
 TAXI_RANKS = {
     "Rank 1": [("Shift", "shift", 7500), ("Service", "service", 6000)],
     "Rank 2": [("Shift", "shift", 7500), ("Service", "service", 8500)],
@@ -92,7 +91,6 @@ TAXI_RANKS = {
     "Rank 5": [("Shift", "shift", 7500), ("Service", "service", 15000)],
 }
 
-# New Reporter: SP is fixed across all ranks, Day / Night vary.
 NEW_REPORTER_RANKS = {
     "Rank 1": [("SP", "sp", 25000), ("Day", "day", 9000),  ("Night", "night", 4000)],
     "Rank 2": [("SP", "sp", 25000), ("Day", "day", 1000),  ("Night", "night", 4000)],
@@ -108,10 +106,48 @@ RANK_BASED_FACTIONS = {
     "New Reporter": NEW_REPORTER_RANKS,
 }
 
-ALL_FACTION_NAMES = list(FACTIONS.keys()) + list(RANK_BASED_FACTIONS.keys())
+# --- Coming soon factions (folder structure only, no prices yet) ---
+COMING_SOON_FACTIONS = {
+    "School Instructor": [
+        ("Mojavez",  "mojavez"),
+        ("Tamdid",   "tamdid"),
+        ("Slot-Gun", "slot-gun"),
+        ("Test",     "test"),
+    ],
+    "Mechanic": [
+        ("Tuning",  "tuning"),
+        ("towcar",  "towcar"),
+        ("Repair",  "repair"),
+        ("Refill",  "refill"),
+        ("Service", "service"),
+    ],
+}
+
+# Explicit display order for faction selection
+ALL_FACTION_NAMES = [
+    "Police Department",
+    "Police Federal",
+    "National Guard",
+    "Taxi",
+    "Hitman Agency",
+    "Medic",
+    "School Instructor",
+    "New Reporter",
+    "Mechanic",
+]
 
 DEFAULT_FACTION = "Police Federal"
 DEFAULT_RANK = "Rank 1"
+
+COMING_SOON_MESSAGE = (
+    "Prices for this faction have not been announced yet.\n\n"
+    "This feature will be added in a future update.\n\n"
+    "You can change your faction anytime from Settings."
+)
+
+
+def is_coming_soon(faction: str) -> bool:
+    return faction in COMING_SOON_FACTIONS
 
 
 def get_prices(faction: str, rank: str | None = None):
@@ -119,7 +155,9 @@ def get_prices(faction: str, rank: str | None = None):
         ranks = RANK_BASED_FACTIONS[faction]
         r = rank if rank in ranks else next(iter(ranks.keys()))
         return ranks[r]
-    return FACTIONS.get(faction, FACTIONS[DEFAULT_FACTION])
+    if faction in FACTIONS:
+        return FACTIONS[faction]
+    return []
 
 
 def faction_requires_rank(faction: str) -> bool:
@@ -221,6 +259,10 @@ def _find_nested(parent: Path, key: str) -> Path | None:
 
 
 def _collect_category_dirs(screenshots_dir: Path) -> dict[str, Path]:
+    """
+    Return a dict mapping lowercased folder names to their Path.
+    This makes folder name matching case-insensitive.
+    """
     result: dict[str, Path] = {}
     for entry in screenshots_dir.iterdir():
         if entry.is_dir():
@@ -604,10 +646,7 @@ class FactionDialog(QDialog):
         self.radios: dict[str, QRadioButton] = {}
 
         for name in ALL_FACTION_NAMES:
-            label = name
-            if faction_requires_rank(name):
-                label = f"{name}  (rank-based)"
-            rb = QRadioButton(label)
+            rb = QRadioButton(name)
             rb.setMinimumHeight(36)
             rb.setStyleSheet(
                 "QRadioButton { padding: 8px 12px; font-size: 14px; }"
@@ -646,7 +685,7 @@ class FactionDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Rank picker dialog (for rank-based factions)
+# Rank picker dialog
 # ---------------------------------------------------------------------------
 class RankDialog(QDialog):
     def __init__(self, parent=None, faction: str = "Medic",
@@ -1225,6 +1264,7 @@ class MainWindow(QMainWindow):
         self.settings_faction_label.setText(self.faction)
 
         is_ranked = faction_requires_rank(self.faction)
+        coming_soon = is_coming_soon(self.faction)
 
         self.home_rank_card.setVisible(is_ranked)
         self.settings_rank_card.setVisible(is_ranked)
@@ -1237,6 +1277,16 @@ class MainWindow(QMainWindow):
         name_display = self.game_name if self.game_name else "(not set yet)"
         self.home_name_label.setText(name_display)
         self.settings_name_label.setText(name_display)
+
+        if coming_soon:
+            folder_names = [name for name, _ in COMING_SOON_FACTIONS[self.faction]]
+            self.calc_desc.setText(
+                f"Faction: {self.faction}\n"
+                f"Supported folders: {' • '.join(folder_names)}\n\n"
+                f"⚠  Prices for this faction have not been announced yet. "
+                f"This feature will be added in a future update."
+            )
+            return
 
         prices = get_prices(self.faction, self.rank)
         parts = [f"{name} ${price:,}" for name, _, price in prices]
@@ -1251,6 +1301,15 @@ class MainWindow(QMainWindow):
         )
 
     def run_report(self) -> None:
+        if is_coming_soon(self.faction):
+            QMessageBox.information(
+                self, "Coming Soon",
+                f"Prices for '{self.faction}' have not been announced yet.\n\n"
+                "This feature will be added in a future update.\n\n"
+                "You can change your faction anytime from Settings."
+            )
+            return
+
         results, error = calculate_report(
             self.mta_folder, self.faction, self.rank
         )
@@ -1319,6 +1378,15 @@ class MainWindow(QMainWindow):
         return self.game_name
 
     def create_report_folder(self) -> None:
+        if is_coming_soon(self.faction):
+            QMessageBox.information(
+                self, "Coming Soon",
+                f"Prices for '{self.faction}' have not been announced yet.\n\n"
+                "This feature will be added in a future update.\n\n"
+                "You can change your faction anytime from Settings."
+            )
+            return
+
         if self._convert_worker is not None and self._convert_worker.isRunning():
             QMessageBox.information(
                 self, "Please Wait",
@@ -1388,6 +1456,15 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Create Report Error", message)
 
     def clear_reports(self) -> None:
+        if is_coming_soon(self.faction):
+            QMessageBox.information(
+                self, "Coming Soon",
+                f"Prices for '{self.faction}' have not been announced yet.\n\n"
+                "This feature will be added in a future update.\n\n"
+                "You can change your faction anytime from Settings."
+            )
+            return
+
         screenshots_dir = Path(self.mta_folder) / "screenshots"
         if not screenshots_dir.is_dir():
             QMessageBox.warning(
