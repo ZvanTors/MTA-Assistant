@@ -23,7 +23,19 @@
 
 <p>Watch a quick walkthrough of MTA Assistant in action — from setup to creating your first work report.</p>
 
-<div id="14883099495"><script type="text/JavaScript" src="https://www.aparat.com/embed/dus4h5a?data[rnddiv]=14883099495&data[responsive]=yes"></script></div>
+<div align="center">
+
+  <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
+    <img src="https://www.aparat.com/video/video/thumbnail/videohash/dus4h5a" alt="MTA Assistant Video Tutorial" width="720" />
+  </a>
+
+  <br><br>
+
+  <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
+    <strong>▶  Watch on Aparat</strong>
+  </a>
+
+</div>
 
 <hr>
 
