@@ -1,21 +1,27 @@
 """
-MTA Assistant - v1.8.0  ( Made By AmooReza )
+MTA Assistant - v1.9.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
+import csv
 import io
+import os
 import sys
 import shutil
 import winreg
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal, QSize
+from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument
+from PySide6.QtPrintSupport import QPrinter
+from PySide6.QtCore import QMarginsF
+from PySide6.QtGui import QPageSize, QPageLayout
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QRadioButton, QButtonGroup, QProgressBar
+    QRadioButton, QButtonGroup, QProgressBar, QScrollArea, QGridLayout
 )
 
 try:
@@ -28,7 +34,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -37,10 +43,11 @@ REG_VALUE_FOLDER = "MTAFolder"
 REG_VALUE_NAME = "GameName"
 REG_VALUE_FACTION = "Faction"
 REG_VALUE_RANK = "Rank"
+REG_VALUE_THEME = "Theme"   # "light" or "dark"
 
 MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
 
-# --- Static factions (fixed prices per category) ---
+# --- Static factions ---
 FACTIONS = {
     "Police Federal": [
         ("Arrest",  "arrest",  5000),
@@ -66,7 +73,7 @@ FACTIONS = {
     ],
 }
 
-# --- Rank-based factions (prices depend on rank) ---
+# --- Rank-based factions ---
 MEDIC_RANKS = {
     "Rank 1": [("Heal", "heal", 6300), ("Service", "service", 5000)],
     "Rank 2": [("Heal", "heal", 7000), ("Service", "service", 6000)],
@@ -106,7 +113,7 @@ RANK_BASED_FACTIONS = {
     "New Reporter": NEW_REPORTER_RANKS,
 }
 
-# --- Coming soon factions (folder structure only, no prices yet) ---
+# --- Coming soon factions ---
 COMING_SOON_FACTIONS = {
     "School Instructor": [
         ("Mojavez",  "mojavez"),
@@ -123,7 +130,6 @@ COMING_SOON_FACTIONS = {
     ],
 }
 
-# Explicit display order for faction selection
 ALL_FACTION_NAMES = [
     "Police Department",
     "Police Federal",
@@ -138,6 +144,7 @@ ALL_FACTION_NAMES = [
 
 DEFAULT_FACTION = "Police Federal"
 DEFAULT_RANK = "Rank 1"
+DEFAULT_THEME = "light"
 
 COMING_SOON_MESSAGE = (
     "Prices for this faction have not been announced yet.\n\n"
@@ -165,7 +172,7 @@ def faction_requires_rank(faction: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Resource path helper
+# Resource path
 # ---------------------------------------------------------------------------
 def resource_path(relative: str) -> Path:
     base = getattr(sys, "_MEIPASS", None)
@@ -235,6 +242,17 @@ def save_rank(rank: str) -> None:
     _write_value(REG_VALUE_RANK, rank)
 
 
+def get_saved_theme() -> str:
+    value = _read_value(REG_VALUE_THEME)
+    if value in ("light", "dark"):
+        return value
+    return DEFAULT_THEME
+
+
+def save_theme(theme: str) -> None:
+    _write_value(REG_VALUE_THEME, theme)
+
+
 # ---------------------------------------------------------------------------
 # Filesystem helpers
 # ---------------------------------------------------------------------------
@@ -259,14 +277,42 @@ def _find_nested(parent: Path, key: str) -> Path | None:
 
 
 def _collect_category_dirs(screenshots_dir: Path) -> dict[str, Path]:
-    """
-    Return a dict mapping lowercased folder names to their Path.
-    This makes folder name matching case-insensitive.
-    """
     result: dict[str, Path] = {}
     for entry in screenshots_dir.iterdir():
         if entry.is_dir():
             result.setdefault(entry.name.lower(), entry)
+    return result
+
+
+def _list_pngs_for_category(base_folder: str, key: str) -> list[Path]:
+    """Return all PNGs inside the first-level folder + nested same-named folder."""
+    screenshots_dir = Path(base_folder) / "screenshots"
+    if not screenshots_dir.is_dir():
+        return []
+    try:
+        subdirs = _collect_category_dirs(screenshots_dir)
+    except OSError:
+        return []
+    cat = subdirs.get(key)
+    if cat is None:
+        return []
+    result: list[Path] = []
+    try:
+        result.extend(
+            sorted(f for f in cat.iterdir()
+                   if f.is_file() and f.suffix.lower() == ".png")
+        )
+    except OSError:
+        pass
+    nested = _find_nested(cat, key)
+    if nested is not None:
+        try:
+            result.extend(
+                sorted(f for f in nested.iterdir()
+                       if f.is_file() and f.suffix.lower() == ".png")
+            )
+        except OSError:
+            pass
     return result
 
 
@@ -297,7 +343,6 @@ def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYT
         size = buf.tell()
         if size <= max_bytes:
             break
-
         if quality > 50:
             quality -= 7
         else:
@@ -327,7 +372,6 @@ def calculate_report(base_folder: str, faction: str, rank: str | None = None):
             "Please make sure the selected MTA:SA folder contains a "
             "'screenshots' directory."
         )
-
     try:
         subdirs = _collect_category_dirs(screenshots_dir)
     except OSError as exc:
@@ -343,7 +387,6 @@ def calculate_report(base_folder: str, faction: str, rank: str | None = None):
             if nested is not None:
                 count += _count_pngs(nested)
         results.append((display_name, count, price, count * price))
-
     return results, None
 
 
@@ -364,7 +407,88 @@ def count_total_pngs(base_folder: str, faction: str, rank: str | None = None) ->
 
 
 # ---------------------------------------------------------------------------
-# Convert worker thread
+# Export helpers
+# ---------------------------------------------------------------------------
+def export_report_csv(path: str, faction_display: str, results,
+                      total_count: int, total_amount: int) -> None:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["MTA Assistant — Work Report"])
+        writer.writerow(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M")])
+        writer.writerow(["Faction", faction_display])
+        writer.writerow([])
+        writer.writerow(["Category", "Screenshots", "Unit Price", "Total"])
+        for name, count, price, subtotal in results:
+            writer.writerow([name, count, price, subtotal])
+        writer.writerow([])
+        writer.writerow(["TOTAL", total_count, "", total_amount])
+
+
+def export_report_pdf(path: str, faction_display: str, game_name: str,
+                      results, total_count: int, total_amount: int) -> None:
+    rows_html = "".join(
+        f"<tr>"
+        f"<td style='padding:8px; border-bottom:1px solid #e1e8ed;'>{name}</td>"
+        f"<td style='padding:8px; text-align:center; border-bottom:1px solid #e1e8ed;'>{count}</td>"
+        f"<td style='padding:8px; text-align:right; border-bottom:1px solid #e1e8ed;'>${price:,}</td>"
+        f"<td style='padding:8px; text-align:right; border-bottom:1px solid #e1e8ed;'>${subtotal:,}</td>"
+        f"</tr>"
+        for name, count, price, subtotal in results
+    )
+
+    html = f"""
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; color:#2c3e50;">
+      <h1 style="color:#3498db; margin-bottom:4px;">MTA Assistant</h1>
+      <h2 style="color:#34495e; margin-top:0;">Work Report</h2>
+      <p style="color:#6b7c93; margin:2px 0;">
+        <b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}<br>
+        <b>Player:</b> {game_name or '(not set)'}<br>
+        <b>Faction:</b> {faction_display}
+      </p>
+      <br>
+      <table style="width:100%; border-collapse:collapse; border:1px solid #e1e8ed;">
+        <thead>
+          <tr style="background:#3498db; color:white;">
+            <th style="padding:10px; text-align:left;">Category</th>
+            <th style="padding:10px; text-align:center;">Screenshots</th>
+            <th style="padding:10px; text-align:right;">Unit Price</th>
+            <th style="padding:10px; text-align:right;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+      <br>
+      <table style="width:100%; background:#eaf4fc; border-radius:6px;">
+        <tr>
+          <td style="padding:12px; font-weight:bold;">Total Screenshots: {total_count:,}</td>
+          <td style="padding:12px; text-align:right; font-weight:bold;">Total Amount: ${total_amount:,}</td>
+        </tr>
+      </table>
+      <br><br>
+      <p style="color:#95a5a6; font-size:10px; text-align:center;">
+        Made with ♥ by {APP_AUTHOR} — MTA Assistant v{APP_VERSION}
+      </p>
+    </body>
+    </html>
+    """
+
+    printer = QPrinter(QPrinter.HighResolution)
+    printer.setOutputFormat(QPrinter.PdfFormat)
+    printer.setOutputFileName(path)
+    printer.setPageSize(QPageSize(QPageSize.A4))
+    printer.setPageMargins(QMarginsF(15, 15, 15, 15), QPageLayout.Millimeter)
+
+    doc = QTextDocument()
+    doc.setHtml(html)
+    doc.print_(printer)
+
+
+# ---------------------------------------------------------------------------
+# Convert worker
 # ---------------------------------------------------------------------------
 class ConvertWorker(QThread):
     progress = Signal(int, int)
@@ -438,9 +562,7 @@ class ConvertWorker(QThread):
             try:
                 dst_dir.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
-                self.failed.emit(
-                    f"Failed to create '{display_name}' folder:\n{exc}"
-                )
+                self.failed.emit(f"Failed to create '{display_name}' folder:\n{exc}")
                 return
 
             cat = subdirs.get(key)
@@ -448,10 +570,8 @@ class ConvertWorker(QThread):
                 continue
 
             try:
-                pngs = [
-                    f for f in cat.iterdir()
-                    if f.is_file() and f.suffix.lower() == ".png"
-                ]
+                pngs = [f for f in cat.iterdir()
+                        if f.is_file() and f.suffix.lower() == ".png"]
             except OSError:
                 pngs = []
 
@@ -460,9 +580,7 @@ class ConvertWorker(QThread):
                 try:
                     compress_to_jpg(png, dst_jpg)
                 except Exception as exc:
-                    self.failed.emit(
-                        f"Failed to process '{png.name}':\n{exc}"
-                    )
+                    self.failed.emit(f"Failed to process '{png.name}':\n{exc}")
                     return
                 done += 1
                 self.progress.emit(done, total)
@@ -473,10 +591,8 @@ class ConvertWorker(QThread):
             if zip_path.exists():
                 zip_path.unlink()
             shutil.make_archive(
-                base_name=str(zip_base),
-                format="zip",
-                root_dir=str(desktop),
-                base_dir=target.name,
+                base_name=str(zip_base), format="zip",
+                root_dir=str(desktop), base_dir=target.name,
             )
         except OSError as exc:
             self.failed.emit(
@@ -498,7 +614,6 @@ def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
             "The 'screenshots' folder was not found at:\n"
             f"{screenshots_dir}"
         )
-
     try:
         subdirs = _collect_category_dirs(screenshots_dir)
     except OSError as exc:
@@ -506,7 +621,6 @@ def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
 
     deleted = 0
     errors: list[str] = []
-
     for display_name, key, _ in get_prices(faction, rank):
         cat = subdirs.get(key)
         if cat is None:
@@ -527,8 +641,140 @@ def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
         if len(errors) > 5:
             summary += f"\n... and {len(errors) - 5} more errors."
         return deleted, summary
-
     return deleted, None
+
+
+# ---------------------------------------------------------------------------
+# Stylesheets — Light & Dark
+# ---------------------------------------------------------------------------
+QSS_LIGHT = """
+    QMainWindow, QDialog { background: #f7f9fb; }
+    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #2c3e50; }
+    QMenuBar { background: #ffffff; border-bottom: 1px solid #e1e8ed; }
+    QMenuBar::item { padding: 6px 12px; background: transparent; }
+    QMenuBar::item:selected { background: #eaf4fc; border-radius: 4px; }
+    QMenu { background: #ffffff; border: 1px solid #e1e8ed; padding: 4px; }
+    QMenu::item { padding: 6px 22px; border-radius: 4px; }
+    QMenu::item:selected { background: #eaf4fc; }
+    QMenu::item:disabled { color: #b0bec5; }
+    QPushButton {
+        background: #3498db; color: white; border: none;
+        border-radius: 6px; padding: 8px 18px; font-weight: 600;
+    }
+    QPushButton:hover { background: #2980b9; }
+    QPushButton:pressed { background: #2471a3; }
+    QPushButton:disabled { background: #bdc3c7; }
+    QPushButton#secondaryButton { background: #ecf0f1; color: #2c3e50; }
+    QPushButton#secondaryButton:hover { background: #dfe4e6; }
+    QPushButton#backButton {
+        background: #ecf0f1; color: #2c3e50; padding: 6px 14px; font-weight: 500;
+    }
+    QPushButton#backButton:hover { background: #dfe4e6; }
+    QPushButton#dangerButton { background: #e74c3c; color: white; }
+    QPushButton#dangerButton:hover { background: #c0392b; }
+    QPushButton#dangerButton:pressed { background: #a93226; }
+    QPushButton#dangerButton:disabled { background: #e6b0aa; }
+    QLineEdit {
+        background: #ffffff; border: 1px solid #d6dee6; border-radius: 6px;
+        padding: 6px 10px; selection-background-color: #3498db;
+    }
+    QLineEdit:focus { border: 1px solid #3498db; }
+    QRadioButton { color: #2c3e50; spacing: 10px; }
+    QRadioButton::indicator {
+        width: 16px; height: 16px; border: 2px solid #b0bec5;
+        border-radius: 9px; background: white;
+    }
+    QRadioButton::indicator:hover { border-color: #3498db; }
+    QRadioButton::indicator:checked { border: 5px solid #3498db; background: white; }
+    QFrame#card {
+        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 10px;
+    }
+    QProgressBar {
+        background: #ecf0f1; border: 1px solid #d6dee6; border-radius: 6px;
+        text-align: center; color: #2c3e50; font-weight: 600; height: 22px;
+    }
+    QProgressBar::chunk { background: #3498db; border-radius: 5px; }
+    QTableWidget {
+        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 8px;
+        gridline-color: #eef2f5; alternate-background-color: #f7fafc;
+        font-size: 13px;
+    }
+    QTableWidget::item { padding: 6px; }
+    QTableWidget::item:selected { background: #eaf4fc; color: #2c3e50; }
+    QHeaderView::section {
+        background: #3498db; color: white; padding: 10px;
+        border: none; font-weight: bold;
+    }
+    QHeaderView::section:first { border-top-left-radius: 8px; }
+    QHeaderView::section:last { border-top-right-radius: 8px; }
+    QScrollArea { background: #f7f9fb; border: none; }
+    QScrollArea > QWidget > QWidget { background: #f7f9fb; }
+"""
+
+QSS_DARK = """
+    QMainWindow, QDialog { background: #1a1a2e; }
+    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #e8e8f0; }
+    QMenuBar { background: #252540; border-bottom: 1px solid #353555; color: #e8e8f0; }
+    QMenuBar::item { padding: 6px 12px; background: transparent; }
+    QMenuBar::item:selected { background: #353555; border-radius: 4px; }
+    QMenu { background: #252540; border: 1px solid #353555; padding: 4px; color: #e8e8f0; }
+    QMenu::item { padding: 6px 22px; border-radius: 4px; }
+    QMenu::item:selected { background: #353555; }
+    QMenu::item:disabled { color: #555570; }
+    QPushButton {
+        background: #4a9eff; color: white; border: none;
+        border-radius: 6px; padding: 8px 18px; font-weight: 600;
+    }
+    QPushButton:hover { background: #3a8eef; }
+    QPushButton:pressed { background: #2a7edf; }
+    QPushButton:disabled { background: #3a3a4e; color: #777788; }
+    QPushButton#secondaryButton { background: #353555; color: #e8e8f0; }
+    QPushButton#secondaryButton:hover { background: #404060; }
+    QPushButton#backButton {
+        background: #353555; color: #e8e8f0; padding: 6px 14px; font-weight: 500;
+    }
+    QPushButton#backButton:hover { background: #404060; }
+    QPushButton#dangerButton { background: #e74c3c; color: white; }
+    QPushButton#dangerButton:hover { background: #c0392b; }
+    QPushButton#dangerButton:pressed { background: #a93226; }
+    QPushButton#dangerButton:disabled { background: #5a3a3a; color: #a08080; }
+    QLineEdit {
+        background: #252540; border: 1px solid #353555; border-radius: 6px;
+        padding: 6px 10px; color: #e8e8f0; selection-background-color: #4a9eff;
+    }
+    QLineEdit:focus { border: 1px solid #4a9eff; }
+    QRadioButton { color: #e8e8f0; spacing: 10px; }
+    QRadioButton::indicator {
+        width: 16px; height: 16px; border: 2px solid #555570;
+        border-radius: 9px; background: #252540;
+    }
+    QRadioButton::indicator:hover { border-color: #4a9eff; }
+    QRadioButton::indicator:checked { border: 5px solid #4a9eff; background: #252540; }
+    QFrame#card {
+        background: #252540; border: 1px solid #353555; border-radius: 10px;
+    }
+    QProgressBar {
+        background: #353555; border: 1px solid #454565; border-radius: 6px;
+        text-align: center; color: #e8e8f0; font-weight: 600; height: 22px;
+    }
+    QProgressBar::chunk { background: #4a9eff; border-radius: 5px; }
+    QTableWidget {
+        background: #252540; border: 1px solid #353555; border-radius: 8px;
+        gridline-color: #353555; alternate-background-color: #2a2a48;
+        font-size: 13px; color: #e8e8f0;
+    }
+    QTableWidget::item { padding: 6px; }
+    QTableWidget::item:selected { background: #353570; color: #ffffff; }
+    QHeaderView::section {
+        background: #4a9eff; color: white; padding: 10px;
+        border: none; font-weight: bold;
+    }
+    QHeaderView::section:first { border-top-left-radius: 8px; }
+    QHeaderView::section:last { border-top-right-radius: 8px; }
+    QScrollArea { background: #1a1a2e; border: none; }
+    QScrollArea > QWidget > QWidget { background: #1a1a2e; }
+    QLabel { color: #e8e8f0; }
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -564,9 +810,7 @@ class FolderPickerDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
         self.path_edit = QLineEdit(initial)
-        self.path_edit.setPlaceholderText(
-            r"C:\Program Files (x86)\MTA San Andreas 1.6"
-        )
+        self.path_edit.setPlaceholderText(r"C:\Program Files (x86)\MTA San Andreas 1.6")
         self.path_edit.setMinimumHeight(34)
         browse_btn = QPushButton("Browse...")
         browse_btn.setMinimumHeight(34)
@@ -593,21 +837,17 @@ class FolderPickerDialog(QDialog):
         start = self.path_edit.text().strip()
         if not start or not Path(start).is_dir():
             start = str(Path.home())
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select MTA:SA Folder", start
-        )
+        folder = QFileDialog.getExistingDirectory(self, "Select MTA:SA Folder", start)
         if folder:
             self.path_edit.setText(folder)
 
     def _confirm(self) -> None:
         path = self.path_edit.text().strip()
         if not path:
-            QMessageBox.warning(self, "Invalid Path",
-                                "Please select a folder first.")
+            QMessageBox.warning(self, "Invalid Path", "Please select a folder first.")
             return
         if not Path(path).is_dir():
-            QMessageBox.warning(self, "Invalid Path",
-                                "The selected folder does not exist.")
+            QMessageBox.warning(self, "Invalid Path", "The selected folder does not exist.")
             return
         self.selected_path = path
         self.accept()
@@ -680,8 +920,7 @@ class FactionDialog(QDialog):
                 self.faction_value = name
                 self.accept()
                 return
-        QMessageBox.warning(self, "Invalid Selection",
-                            "Please select a faction.")
+        QMessageBox.warning(self, "Invalid Selection", "Please select a faction.")
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +939,6 @@ class RankDialog(QDialog):
 
     def _build_ui(self, initial: str | None) -> None:
         ranks = RANK_BASED_FACTIONS.get(self.faction_name, {})
-
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 22, 22, 22)
         root.setSpacing(14)
@@ -710,8 +948,7 @@ class RankDialog(QDialog):
         root.addWidget(title)
 
         hint = QLabel(
-            "Prices depend on your rank. You can change this later in "
-            "Settings."
+            "Prices depend on your rank. You can change this later in Settings."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #6b7c93;")
@@ -719,7 +956,6 @@ class RankDialog(QDialog):
 
         self.group = QButtonGroup(self)
         self.radios: dict[str, QRadioButton] = {}
-
         first_rank = next(iter(ranks.keys()), None)
 
         for rank_name, prices in ranks.items():
@@ -759,12 +995,11 @@ class RankDialog(QDialog):
                 self.rank_value = name
                 self.accept()
                 return
-        QMessageBox.warning(self, "Invalid Selection",
-                            "Please select a rank.")
+        QMessageBox.warning(self, "Invalid Selection", "Please select a rank.")
 
 
 # ---------------------------------------------------------------------------
-# Game-name input dialog
+# Game-name dialog
 # ---------------------------------------------------------------------------
 class GameNameDialog(QDialog):
     def __init__(self, parent=None, initial: str = ""):
@@ -816,8 +1051,7 @@ class GameNameDialog(QDialog):
     def _confirm(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "Invalid Name",
-                                "Please enter your in-game name.")
+            QMessageBox.warning(self, "Invalid Name", "Please enter your in-game name.")
             return
         forbidden = set('\\/:*?"<>|')
         if any(ch in forbidden for ch in name):
@@ -866,7 +1100,7 @@ class ProgressDialog(QDialog):
 
         self.label = QLabel(f"0 / {total} files")
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet("color: #2c3e50; font-weight: 600;")
+        self.label.setStyleSheet("font-weight: 600;")
         root.addWidget(self.label)
 
     def update_progress(self, done: int, total: int) -> None:
@@ -876,23 +1110,135 @@ class ProgressDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Screenshot preview dialog
+# ---------------------------------------------------------------------------
+class ScreenshotPreviewDialog(QDialog):
+    THUMB_W = 200
+    THUMB_H = 140
+
+    def __init__(self, parent, category_name: str, png_files: list[Path]):
+        super().__init__(parent)
+        self.category_name = category_name
+        self.png_files = png_files
+        self.setWindowTitle(f"Screenshots — {category_name}  ({len(png_files)} files)")
+        self.setModal(True)
+        self.resize(880, 620)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(12)
+
+        header = QLabel(
+            f"<b>{category_name}</b> — {len(png_files)} screenshot(s)"
+        )
+        header.setStyleSheet("font-size: 15px;")
+        root.addWidget(header)
+
+        hint = QLabel("Double-click a thumbnail to open it in your default viewer.")
+        hint.setStyleSheet("color: #6b7c93;")
+        root.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setSpacing(12)
+
+        cols = 3
+        for i, png in enumerate(png_files):
+            thumb = self._make_thumbnail(png)
+            grid.addWidget(thumb, i // cols, i % cols)
+
+        # Push grid to top
+        grid.setRowStretch(grid.rowCount(), 1)
+
+        scroll.setWidget(container)
+        root.addWidget(scroll, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("secondaryButton")
+        close_btn.setMinimumHeight(34)
+        close_btn.setMinimumWidth(120)
+        close_btn.clicked.connect(self.accept)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        root.addLayout(btn_row)
+
+    def _make_thumbnail(self, png_path: Path) -> QWidget:
+        box = QFrame()
+        box.setObjectName("card")
+        box.setFixedSize(self.THUMB_W + 16, self.THUMB_H + 40)
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(4)
+
+        img_label = QLabel()
+        img_label.setFixedSize(self.THUMB_W, self.THUMB_H)
+        img_label.setAlignment(Qt.AlignCenter)
+        img_label.setStyleSheet("background: rgba(0,0,0,0.05); border-radius: 4px;")
+
+        pix = QPixmap(str(png_path))
+        if not pix.isNull():
+            scaled = pix.scaled(
+                QSize(self.THUMB_W, self.THUMB_H),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            img_label.setPixmap(scaled)
+        else:
+            img_label.setText("(cannot load)")
+
+        v.addWidget(img_label)
+
+        name_label = QLabel(png_path.name)
+        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setWordWrap(False)
+        name_label.setStyleSheet("font-size: 11px; color: #6b7c93;")
+        name_label.setFixedHeight(18)
+        v.addWidget(name_label)
+
+        # Make thumbnail clickable to open in default viewer
+        box.setCursor(Qt.PointingHandCursor)
+        box.mouseDoubleClickEvent = lambda ev, p=png_path: self._open_file(p)
+        img_label.mouseDoubleClickEvent = lambda ev, p=png_path: self._open_file(p)
+
+        return box
+
+    def _open_file(self, path: Path) -> None:
+        try:
+            os.startfile(str(path))  # Windows-only
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Cannot Open File",
+                f"Failed to open:\n{path}\n\nError: {exc}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
     def __init__(self, mta_folder: str, game_name: str | None,
-                 faction: str, rank: str | None):
+                 faction: str, rank: str | None, theme: str):
         super().__init__()
         self.mta_folder = mta_folder
         self.game_name = game_name or ""
         self.faction = faction
         self.rank = rank or DEFAULT_RANK
+        self.theme = theme if theme in ("light", "dark") else DEFAULT_THEME
 
         self._convert_worker: ConvertWorker | None = None
         self._convert_dialog: ProgressDialog | None = None
+        self._last_results: list | None = None
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(960, 820)
-        self.resize(1040, 860)
+        self.setMinimumSize(1000, 840)
+        self.resize(1080, 880)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -910,6 +1256,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._apply_style()
         self._refresh_labels()
+        self._update_theme_button_text()
 
     # ---------------- Menu ----------------
     def _build_menu(self) -> None:
@@ -923,6 +1270,16 @@ class MainWindow(QMainWindow):
         act_create = QAction("Create Work Report", self)
         act_create.triggered.connect(self.create_report_folder)
         tools_menu.addAction(act_create)
+
+        tools_menu.addSeparator()
+
+        act_export_csv = QAction("Export Report to CSV...", self)
+        act_export_csv.triggered.connect(self.export_csv)
+        tools_menu.addAction(act_export_csv)
+
+        act_export_pdf = QAction("Export Report to PDF...", self)
+        act_export_pdf.triggered.connect(self.export_pdf)
+        tools_menu.addAction(act_export_pdf)
 
         tools_menu.addSeparator()
 
@@ -947,6 +1304,12 @@ class MainWindow(QMainWindow):
         self.act_rank.triggered.connect(self.change_rank)
         settings_menu.addAction(self.act_rank)
 
+        settings_menu.addSeparator()
+
+        self.act_theme = QAction("Toggle Dark Mode", self)
+        self.act_theme.triggered.connect(self.toggle_theme)
+        settings_menu.addAction(self.act_theme)
+
         help_menu = menubar.addMenu("Help")
         act_about = QAction(f"About {APP_NAME}", self)
         act_about.triggered.connect(self.show_about)
@@ -961,9 +1324,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel(APP_NAME)
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(
-            "font-size: 32px; font-weight: bold; color: #2c3e50;"
-        )
+        title.setStyleSheet("font-size: 32px; font-weight: bold;")
         layout.addWidget(title)
 
         subtitle = QLabel(f"Version {APP_VERSION}   •   Made By {APP_AUTHOR}")
@@ -980,34 +1341,24 @@ class MainWindow(QMainWindow):
             v.setContentsMargins(18, 14, 18, 14)
             v.setSpacing(4)
             t = QLabel(title_text)
-            t.setStyleSheet(
-                "font-weight: bold; color: #34495e; font-size: 12px;"
-            )
+            t.setStyleSheet("font-weight: bold; font-size: 12px;")
             val = QLabel()
             val.setWordWrap(True)
-            val.setStyleSheet("color: #2c3e50; font-size: 13px;")
+            val.setStyleSheet("font-size: 13px;")
             v.addWidget(t)
             v.addWidget(val)
             return box, val
 
-        self.home_folder_card, self.home_folder_label = make_card(
-            "Current MTA:SA Folder"
-        )
+        self.home_folder_card, self.home_folder_label = make_card("Current MTA:SA Folder")
         layout.addWidget(self.home_folder_card)
 
-        self.home_faction_card, self.home_faction_label = make_card(
-            "Current Faction"
-        )
+        self.home_faction_card, self.home_faction_label = make_card("Current Faction")
         layout.addWidget(self.home_faction_card)
 
-        self.home_rank_card, self.home_rank_label = make_card(
-            "Current Rank"
-        )
+        self.home_rank_card, self.home_rank_label = make_card("Current Rank")
         layout.addWidget(self.home_rank_card)
 
-        self.home_name_card, self.home_name_label = make_card(
-            "Current Game Name"
-        )
+        self.home_name_card, self.home_name_label = make_card("Current Game Name")
         layout.addWidget(self.home_name_card)
 
         layout.addSpacing(16)
@@ -1018,16 +1369,12 @@ class MainWindow(QMainWindow):
         tools_btn = QPushButton("Tools")
         tools_btn.setMinimumHeight(90)
         tools_btn.setStyleSheet("font-size: 17px; font-weight: bold;")
-        tools_btn.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.tools_page)
-        )
+        tools_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.tools_page))
 
         settings_btn = QPushButton("Settings")
         settings_btn.setMinimumHeight(90)
         settings_btn.setStyleSheet("font-size: 17px; font-weight: bold;")
-        settings_btn.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.settings_page)
-        )
+        settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
 
         btn_row.addWidget(tools_btn)
         btn_row.addWidget(settings_btn)
@@ -1045,9 +1392,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         back = QPushButton("←  Back")
         back.setObjectName("backButton")
-        back.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.home_page)
-        )
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.home_page))
         header.addWidget(back)
         header.addStretch()
         layout.addLayout(header)
@@ -1146,11 +1491,22 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         back = QPushButton("←  Back")
         back.setObjectName("backButton")
-        back.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.tools_page)
-        )
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.tools_page))
         header.addWidget(back)
         header.addStretch()
+
+        self.btn_export_csv = QPushButton("Export CSV")
+        self.btn_export_csv.setObjectName("secondaryButton")
+        self.btn_export_csv.setMinimumHeight(32)
+        self.btn_export_csv.clicked.connect(self.export_csv)
+        header.addWidget(self.btn_export_csv)
+
+        self.btn_export_pdf = QPushButton("Export PDF")
+        self.btn_export_pdf.setObjectName("secondaryButton")
+        self.btn_export_pdf.setMinimumHeight(32)
+        self.btn_export_pdf.clicked.connect(self.export_pdf)
+        header.addWidget(self.btn_export_pdf)
+
         refresh_btn = QPushButton("Recalculate")
         refresh_btn.setMinimumHeight(32)
         refresh_btn.clicked.connect(self.run_report)
@@ -1166,6 +1522,10 @@ class MainWindow(QMainWindow):
         self.report_info.setWordWrap(True)
         layout.addWidget(self.report_info)
 
+        preview_hint = QLabel("💡 Double-click a row to preview its screenshots.")
+        preview_hint.setStyleSheet("color: #6b7c93; font-size: 12px;")
+        layout.addWidget(preview_hint)
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
             ["Folder", "Screenshots", "Unit Price", "Total"]
@@ -1173,16 +1533,18 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
         layout.addWidget(self.table, 1)
 
         self.summary_label = QLabel()
         self.summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.summary_label.setStyleSheet(
-            "font-size: 15px; font-weight: bold; color: #2c3e50;"
+            "font-size: 15px; font-weight: bold;"
             "background: #eaf4fc; padding: 12px 16px; border-radius: 8px;"
         )
         layout.addWidget(self.summary_label)
@@ -1198,9 +1560,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         back = QPushButton("←  Back")
         back.setObjectName("backButton")
-        back.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.home_page)
-        )
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.home_page))
         header.addWidget(back)
         header.addStretch()
         layout.addLayout(header)
@@ -1216,13 +1576,13 @@ class MainWindow(QMainWindow):
             v.setContentsMargins(22, 22, 22, 22)
             v.setSpacing(12)
             lbl = QLabel(label_text)
-            lbl.setStyleSheet("font-weight: bold; color: #34495e;")
+            lbl.setStyleSheet("font-weight: bold;")
             v.addWidget(lbl)
             val = QLabel()
             val.setWordWrap(True)
             val.setStyleSheet(
-                "color: #2c3e50; background:#f4f6f8; padding:12px;"
-                "border-radius:6px; border: 1px solid #e1e8ed;"
+                "background: rgba(0,0,0,0.04); padding:12px;"
+                "border-radius:6px; border: 1px solid rgba(0,0,0,0.08);"
             )
             v.addWidget(val)
             btn = QPushButton(button_text)
@@ -1230,27 +1590,33 @@ class MainWindow(QMainWindow):
             btn.setMinimumWidth(180)
             btn.clicked.connect(slot)
             v.addWidget(btn, 0, Qt.AlignLeft)
-            return card, val
+            return card, val, btn
 
-        self.settings_folder_card, self.settings_folder_label = make_setting_card(
+        self.settings_folder_card, self.settings_folder_label, _ = make_setting_card(
             "MTA:SA Folder", "Change Folder...", self.change_folder
         )
         layout.addWidget(self.settings_folder_card)
 
-        self.settings_faction_card, self.settings_faction_label = make_setting_card(
+        self.settings_faction_card, self.settings_faction_label, _ = make_setting_card(
             "Faction", "Change Faction...", self.change_faction
         )
         layout.addWidget(self.settings_faction_card)
 
-        self.settings_rank_card, self.settings_rank_label = make_setting_card(
+        self.settings_rank_card, self.settings_rank_label, _ = make_setting_card(
             "Rank", "Change Rank...", self.change_rank
         )
         layout.addWidget(self.settings_rank_card)
 
-        self.settings_name_card, self.settings_name_label = make_setting_card(
+        self.settings_name_card, self.settings_name_label, _ = make_setting_card(
             "Game Name", "Change Game Name...", self.change_name
         )
         layout.addWidget(self.settings_name_card)
+
+        # Theme card
+        self.settings_theme_card, self.settings_theme_label, self.settings_theme_btn = make_setting_card(
+            "Appearance", "Switch Theme", self.toggle_theme
+        )
+        layout.addWidget(self.settings_theme_card)
 
         layout.addStretch()
         return page
@@ -1278,6 +1644,10 @@ class MainWindow(QMainWindow):
         self.home_name_label.setText(name_display)
         self.settings_name_label.setText(name_display)
 
+        # Theme label
+        theme_display = "Dark" if self.theme == "dark" else "Light"
+        self.settings_theme_label.setText(f"Current theme: {theme_display}")
+
         if coming_soon:
             folder_names = [name for name, _ in COMING_SOON_FACTIONS[self.faction]]
             self.calc_desc.setText(
@@ -1300,6 +1670,11 @@ class MainWindow(QMainWindow):
             f"prices:\n" + "  •  ".join(parts)
         )
 
+    def _faction_display(self) -> str:
+        if faction_requires_rank(self.faction):
+            return f"{self.faction} ({self.rank})"
+        return self.faction
+
     def run_report(self) -> None:
         if is_coming_soon(self.faction):
             QMessageBox.information(
@@ -1310,13 +1685,12 @@ class MainWindow(QMainWindow):
             )
             return
 
-        results, error = calculate_report(
-            self.mta_folder, self.faction, self.rank
-        )
+        results, error = calculate_report(self.mta_folder, self.faction, self.rank)
         if error:
             QMessageBox.warning(self, "Report Error", error)
             return
 
+        self._last_results = results
         self.stack.setCurrentWidget(self.report_page)
         self.table.setRowCount(0)
 
@@ -1346,11 +1720,8 @@ class MainWindow(QMainWindow):
             total_amount += subtotal
 
         screenshots_dir = Path(self.mta_folder) / "screenshots"
-        faction_display = self.faction
-        if faction_requires_rank(self.faction):
-            faction_display = f"{self.faction} ({self.rank})"
         self.report_info.setText(
-            f"Faction: {faction_display}      |      "
+            f"Faction: {self._faction_display()}      |      "
             f"Screenshots directory:  {screenshots_dir}"
         )
         self.summary_label.setText(
@@ -1358,10 +1729,135 @@ class MainWindow(QMainWindow):
             f"Total Amount: ${total_amount:,}"
         )
 
+    def _on_row_double_clicked(self, row: int, col: int) -> None:
+        item = self.table.item(row, 0)
+        if item is None:
+            return
+        display_name = item.text()
+
+        # Find matching key from current faction prices
+        key = None
+        for name, k, _ in get_prices(self.faction, self.rank):
+            if name == display_name:
+                key = k
+                break
+        if key is None:
+            # Coming-soon factions: fall back to lowercase name
+            for cn, k in COMING_SOON_FACTIONS.get(self.faction, []):
+                if cn == display_name:
+                    key = k
+                    break
+        if key is None:
+            return
+
+        pngs = _list_pngs_for_category(self.mta_folder, key)
+        if not pngs:
+            QMessageBox.information(
+                self, "No Screenshots",
+                f"No PNG screenshots were found for '{display_name}'."
+            )
+            return
+
+        dlg = ScreenshotPreviewDialog(self, display_name, pngs)
+        dlg.exec()
+
+    # ---------------- Export ----------------
+    def _ensure_report(self) -> bool:
+        if not self._last_results:
+            QMessageBox.information(
+                self, "No Report",
+                "Please calculate the work report first."
+            )
+            return False
+        return True
+
+    def export_csv(self) -> None:
+        if not self._ensure_report():
+            return
+
+        default_name = f"MTA_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save CSV Report",
+            str(Path.home() / "Desktop" / default_name),
+            "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+
+        results = self._last_results
+        total_count = sum(r[1] for r in results)
+        total_amount = sum(r[3] for r in results)
+
+        try:
+            export_report_csv(path, self._faction_display(), results,
+                              total_count, total_amount)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Failed to export CSV:\n{exc}")
+            return
+
+        QMessageBox.information(
+            self, "Export Successful",
+            f"CSV report saved to:\n{path}"
+        )
+
+    def export_pdf(self) -> None:
+        if not self._ensure_report():
+            return
+
+        default_name = f"MTA_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save PDF Report",
+            str(Path.home() / "Desktop" / default_name),
+            "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        results = self._last_results
+        total_count = sum(r[1] for r in results)
+        total_amount = sum(r[3] for r in results)
+
+        try:
+            export_report_pdf(path, self._faction_display(),
+                              self.game_name or "(not set)",
+                              results, total_count, total_amount)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Failed to export PDF:\n{exc}")
+            return
+
+        QMessageBox.information(
+            self, "Export Successful",
+            f"PDF report saved to:\n{path}"
+        )
+
+    # ---------------- Theme ----------------
+    def _update_theme_button_text(self) -> None:
+        if self.theme == "dark":
+            self.act_theme.setText("Switch to Light Mode")
+            if hasattr(self, "settings_theme_btn"):
+                self.settings_theme_btn.setText("Switch to Light Mode")
+        else:
+            self.act_theme.setText("Switch to Dark Mode")
+            if hasattr(self, "settings_theme_btn"):
+                self.settings_theme_btn.setText("Switch to Dark Mode")
+
+    def toggle_theme(self) -> None:
+        self.theme = "dark" if self.theme == "light" else "light"
+        try:
+            save_theme(self.theme)
+        except OSError:
+            pass
+        self._apply_style()
+        self._refresh_labels()
+        self._update_theme_button_text()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(QSS_DARK if self.theme == "dark" else QSS_LIGHT)
+
+    # ---------------- Folder / Faction / Rank / Name ----------------
     def _ensure_game_name(self) -> str | None:
         if self.game_name:
             return self.game_name
-
         dlg = GameNameDialog(self, self.game_name)
         if dlg.exec() != QDialog.Accepted or not dlg.name_value:
             return None
@@ -1409,16 +1905,11 @@ class MainWindow(QMainWindow):
             return
 
         self._convert_dialog = ProgressDialog(self, total)
-
-        worker = ConvertWorker(
-            self.mta_folder, name, self.faction, self.rank, self
-        )
+        worker = ConvertWorker(self.mta_folder, name, self.faction, self.rank, self)
         self._convert_worker = worker
-
         worker.progress.connect(self._convert_dialog.update_progress)
         worker.finished_ok.connect(self._on_convert_finished)
         worker.failed.connect(self._on_convert_failed)
-
         worker.start()
         self._convert_dialog.exec()
 
@@ -1426,19 +1917,14 @@ class MainWindow(QMainWindow):
         if self._convert_dialog is not None:
             self._convert_dialog.accept()
             self._convert_dialog = None
-
         if self._convert_worker is not None:
             self._convert_worker.wait()
             self._convert_worker = None
 
-        faction_display = self.faction
-        if faction_requires_rank(self.faction):
-            faction_display = f"{self.faction} ({self.rank})"
-
         QMessageBox.information(
             self, "Work Report Created",
             "The work report was created successfully.\n\n"
-            f"Faction: {faction_display}\n"
+            f"Faction: {self._faction_display()}\n"
             "All PNG screenshots were converted to JPG (max 250 KB each).\n\n"
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
@@ -1448,11 +1934,9 @@ class MainWindow(QMainWindow):
         if self._convert_dialog is not None:
             self._convert_dialog.reject()
             self._convert_dialog = None
-
         if self._convert_worker is not None:
             self._convert_worker.wait()
             self._convert_worker = None
-
         QMessageBox.warning(self, "Create Report Error", message)
 
     def clear_reports(self) -> None:
@@ -1492,25 +1976,18 @@ class MainWindow(QMainWindow):
         if confirm.clickedButton() is not yes_btn:
             return
 
-        deleted, error = clear_work_reports(
-            self.mta_folder, self.faction, self.rank
-        )
+        deleted, error = clear_work_reports(self.mta_folder, self.faction, self.rank)
 
         if error and deleted == 0:
-            QMessageBox.warning(
-                self, "Clear Work Reports",
-                f"Deletion failed:\n{error}"
-            )
+            QMessageBox.warning(self, "Clear Work Reports",
+                                f"Deletion failed:\n{error}")
             return
-
         if error:
             QMessageBox.warning(
                 self, "Partially Completed",
-                f"Deleted {deleted} file(s), but some errors occurred:\n\n"
-                f"{error}"
+                f"Deleted {deleted} file(s), but some errors occurred:\n\n{error}"
             )
             return
-
         QMessageBox.information(
             self, "Clear Work Reports",
             f"Done. {deleted} file(s) were deleted successfully."
@@ -1523,17 +2000,13 @@ class MainWindow(QMainWindow):
         try:
             save_folder(dlg.selected_path)
         except OSError as exc:
-            QMessageBox.critical(
-                self, "Registry Error",
-                f"Failed to save the folder in the registry:\n{exc}"
-            )
+            QMessageBox.critical(self, "Registry Error",
+                                 f"Failed to save the folder:\n{exc}")
             return
         self.mta_folder = dlg.selected_path
         self._refresh_labels()
-        QMessageBox.information(
-            self, "Saved",
-            "The MTA:SA folder has been updated successfully."
-        )
+        QMessageBox.information(self, "Saved",
+                                "The MTA:SA folder has been updated successfully.")
 
     def change_faction(self) -> None:
         dlg = FactionDialog(self, self.faction)
@@ -1544,10 +2017,8 @@ class MainWindow(QMainWindow):
         try:
             save_faction(new_faction)
         except OSError as exc:
-            QMessageBox.critical(
-                self, "Registry Error",
-                f"Failed to save the faction in the registry:\n{exc}"
-            )
+            QMessageBox.critical(self, "Registry Error",
+                                 f"Failed to save the faction:\n{exc}")
             return
         self.faction = new_faction
 
@@ -1557,53 +2028,40 @@ class MainWindow(QMainWindow):
                 try:
                     save_rank(rank_dlg.rank_value)
                 except OSError as exc:
-                    QMessageBox.critical(
-                        self, "Registry Error",
-                        f"Failed to save the rank in the registry:\n{exc}"
-                    )
+                    QMessageBox.critical(self, "Registry Error",
+                                         f"Failed to save the rank:\n{exc}")
                     return
                 self.rank = rank_dlg.rank_value
-            else:
-                if not self.rank:
-                    self.rank = DEFAULT_RANK
-                    try:
-                        save_rank(self.rank)
-                    except OSError:
-                        pass
+            elif not self.rank:
+                self.rank = DEFAULT_RANK
+                try:
+                    save_rank(self.rank)
+                except OSError:
+                    pass
 
         self._refresh_labels()
-        QMessageBox.information(
-            self, "Saved",
-            f"Faction changed to {self.faction}."
-        )
+        QMessageBox.information(self, "Saved", f"Faction changed to {self.faction}.")
 
     def change_rank(self) -> None:
         if not faction_requires_rank(self.faction):
             QMessageBox.information(
                 self, "Rank",
                 "The current faction does not use ranks.\n"
-                "Ranks are only available for rank-based factions such as "
-                "Medic, Hitman Agency, Taxi or New Reporter."
+                "Ranks are only available for rank-based factions."
             )
             return
-
         dlg = RankDialog(self, self.faction, self.rank)
         if dlg.exec() != QDialog.Accepted or not dlg.rank_value:
             return
         try:
             save_rank(dlg.rank_value)
         except OSError as exc:
-            QMessageBox.critical(
-                self, "Registry Error",
-                f"Failed to save the rank in the registry:\n{exc}"
-            )
+            QMessageBox.critical(self, "Registry Error",
+                                 f"Failed to save the rank:\n{exc}")
             return
         self.rank = dlg.rank_value
         self._refresh_labels()
-        QMessageBox.information(
-            self, "Saved",
-            f"Rank changed to {self.rank}."
-        )
+        QMessageBox.information(self, "Saved", f"Rank changed to {self.rank}.")
 
     def change_name(self) -> None:
         dlg = GameNameDialog(self, self.game_name)
@@ -1612,17 +2070,13 @@ class MainWindow(QMainWindow):
         try:
             save_name(dlg.name_value)
         except OSError as exc:
-            QMessageBox.critical(
-                self, "Registry Error",
-                f"Failed to save the game name in the registry:\n{exc}"
-            )
+            QMessageBox.critical(self, "Registry Error",
+                                 f"Failed to save the game name:\n{exc}")
             return
         self.game_name = dlg.name_value
         self._refresh_labels()
-        QMessageBox.information(
-            self, "Saved",
-            "The game name has been updated successfully."
-        )
+        QMessageBox.information(self, "Saved",
+                                "The game name has been updated successfully.")
 
     def show_about(self) -> None:
         QMessageBox.information(
@@ -1633,125 +2087,13 @@ class MainWindow(QMainWindow):
             "A small utility for MTA:SA players.<br>"
             "• Stores the MTA:SA folder, faction, rank and game name in the "
             "Windows registry.<br>"
-            "• Calculates a work report using faction- and rank-specific "
-            "prices.<br>"
+            "• Calculates a work report using faction- and rank-specific prices.<br>"
             "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
             "a zipped work report on the Desktop.<br>"
-            "• Clears all screenshots from the category folders."
+            "• Exports reports to CSV or PDF.<br>"
+            "• Previews screenshots by double-clicking a category row.<br>"
+            "• Supports both Light and Dark themes."
         )
-
-    # ---------------- Style ----------------
-    def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QMainWindow, QDialog { background: #f7f9fb; }
-            QWidget { font-family: "Segoe UI"; font-size: 13px; color: #2c3e50; }
-
-            QMenuBar { background: #ffffff; border-bottom: 1px solid #e1e8ed; }
-            QMenuBar::item { padding: 6px 12px; background: transparent; }
-            QMenuBar::item:selected { background: #eaf4fc; border-radius: 4px; }
-            QMenu { background: #ffffff; border: 1px solid #e1e8ed; padding: 4px; }
-            QMenu::item { padding: 6px 22px; border-radius: 4px; }
-            QMenu::item:selected { background: #eaf4fc; }
-            QMenu::item:disabled { color: #b0bec5; }
-
-            QPushButton {
-                background: #3498db;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 18px;
-                font-weight: 600;
-            }
-            QPushButton:hover { background: #2980b9; }
-            QPushButton:pressed { background: #2471a3; }
-            QPushButton:disabled { background: #bdc3c7; }
-
-            QPushButton#secondaryButton {
-                background: #ecf0f1;
-                color: #2c3e50;
-            }
-            QPushButton#secondaryButton:hover { background: #dfe4e6; }
-
-            QPushButton#backButton {
-                background: #ecf0f1;
-                color: #2c3e50;
-                padding: 6px 14px;
-                font-weight: 500;
-            }
-            QPushButton#backButton:hover { background: #dfe4e6; }
-
-            QPushButton#dangerButton {
-                background: #e74c3c;
-                color: white;
-            }
-            QPushButton#dangerButton:hover { background: #c0392b; }
-            QPushButton#dangerButton:pressed { background: #a93226; }
-            QPushButton#dangerButton:disabled { background: #e6b0aa; }
-
-            QLineEdit {
-                background: #ffffff;
-                border: 1px solid #d6dee6;
-                border-radius: 6px;
-                padding: 6px 10px;
-                selection-background-color: #3498db;
-            }
-            QLineEdit:focus { border: 1px solid #3498db; }
-
-            QRadioButton {
-                color: #2c3e50;
-                spacing: 10px;
-            }
-            QRadioButton::indicator {
-                width: 16px; height: 16px;
-                border: 2px solid #b0bec5;
-                border-radius: 9px;
-                background: white;
-            }
-            QRadioButton::indicator:hover { border-color: #3498db; }
-            QRadioButton::indicator:checked {
-                border: 5px solid #3498db;
-                background: white;
-            }
-
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #e1e8ed;
-                border-radius: 10px;
-            }
-
-            QProgressBar {
-                background: #ecf0f1;
-                border: 1px solid #d6dee6;
-                border-radius: 6px;
-                text-align: center;
-                color: #2c3e50;
-                font-weight: 600;
-                height: 22px;
-            }
-            QProgressBar::chunk {
-                background: #3498db;
-                border-radius: 5px;
-            }
-
-            QTableWidget {
-                background: #ffffff;
-                border: 1px solid #e1e8ed;
-                border-radius: 8px;
-                gridline-color: #eef2f5;
-                alternate-background-color: #f7fafc;
-                font-size: 13px;
-            }
-            QTableWidget::item { padding: 6px; }
-            QHeaderView::section {
-                background: #3498db;
-                color: white;
-                padding: 10px;
-                border: none;
-                font-weight: bold;
-            }
-            QHeaderView::section:first { border-top-left-radius: 8px; }
-            QHeaderView::section:last  { border-top-right-radius: 8px; }
-        """)
 
 
 # ---------------------------------------------------------------------------
@@ -1775,10 +2117,8 @@ def main() -> int:
         try:
             save_folder(dlg.selected_path)
         except OSError as exc:
-            QMessageBox.critical(
-                None, "Registry Error",
-                f"Failed to save the folder in the registry:\n{exc}"
-            )
+            QMessageBox.critical(None, "Registry Error",
+                                 f"Failed to save the folder:\n{exc}")
             return 1
         folder = dlg.selected_path
 
@@ -1791,14 +2131,12 @@ def main() -> int:
         try:
             save_faction(dlg.faction_value)
         except OSError as exc:
-            QMessageBox.critical(
-                None, "Registry Error",
-                f"Failed to save the faction in the registry:\n{exc}"
-            )
+            QMessageBox.critical(None, "Registry Error",
+                                 f"Failed to save the faction:\n{exc}")
             return 1
         faction = dlg.faction_value
 
-    # 3) Rank (only for rank-based factions, only if not already saved)
+    # 3) Rank
     rank = get_saved_rank()
     if faction_requires_rank(faction) and not rank:
         dlg = RankDialog(None, faction, None)
@@ -1807,17 +2145,18 @@ def main() -> int:
         try:
             save_rank(dlg.rank_value)
         except OSError as exc:
-            QMessageBox.critical(
-                None, "Registry Error",
-                f"Failed to save the rank in the registry:\n{exc}"
-            )
+            QMessageBox.critical(None, "Registry Error",
+                                 f"Failed to save the rank:\n{exc}")
             return 1
         rank = dlg.rank_value
 
     # 4) Game name (on demand)
     game_name = get_saved_name()
 
-    window = MainWindow(folder, game_name, faction, rank)
+    # 5) Theme
+    theme = get_saved_theme()
+
+    window = MainWindow(folder, game_name, faction, rank, theme)
     if icon_path.exists():
         window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
