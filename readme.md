@@ -7,7 +7,7 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.8.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.9.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
@@ -27,6 +27,19 @@
 <h3>📦 One-Click Work Report Creation</h3>
 <p>Converts every PNG screenshot to a compressed JPG (max <strong>250 KB</strong> each), packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar</strong> so the app never freezes.</p>
 
+<h3>📤 Export Reports to CSV & PDF</h3>
+<p>Save your work report as a shareable file — no more screenshots of the table. Export directly to:</p>
+<ul>
+  <li><strong>CSV</strong> — opens in Excel / Google Sheets with proper encoding</li>
+  <li><strong>PDF</strong> — professional layout ready to send to your faction admin</li>
+</ul>
+
+<h3>🌙 Dark Mode</h3>
+<p>Switch between <strong>Light</strong> and <strong>Dark</strong> themes with a single click. Your choice is saved in the Windows registry and applied instantly.</p>
+
+<h3>🖼️ Screenshot Preview</h3>
+<p>Double-click any row in the work report table to open a gallery of that category's screenshots. Double-click a thumbnail to open the original file in your default viewer.</p>
+
 <h3>🚓 Nine Factions Supported</h3>
 <p>Choose your faction and the app applies the correct price list automatically:</p>
 <ul>
@@ -45,10 +58,10 @@
 <p>Rank-based factions (Taxi, Hitman Agency, Medic, New Reporter) support <strong>5 ranks</strong>, each with its own price list. Pick your rank once — it's remembered forever.</p>
 
 <h3>🔤 Case-Insensitive Folder Matching</h3>
-<p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same. Same goes for <code>Slot-Gun</code>, <code>towcar</code>, and every other category.</p>
+<p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same.</p>
 
 <h3>💾 Registry Persistence</h3>
-<p>Your MTA:SA folder, faction, rank, and in-game name are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
+<p>Your MTA:SA folder, faction, rank, in-game name, and theme are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
 
 <h3>🧹 Clear Work Reports</h3>
 <p>Clean out all screenshot folders in one click — with a confirmation dialog for safety.</p>
@@ -75,7 +88,7 @@
   <li><strong>Run</strong> it (UAC prompt will appear — click Yes).</li>
   <li>On first launch, select your <strong>MTA:SA installation folder</strong>.</li>
   <li>Choose your <strong>faction</strong> and — if needed — your <strong>rank</strong>.</li>
-  <li>You're ready. Click <strong>Tools</strong> to calculate a work report or create a new one.</li>
+  <li>You're ready. Click <strong>Tools</strong> to calculate a work report, create a new one, or export it.</li>
 </ol>
 
 <hr>
@@ -250,6 +263,14 @@
 
 <h2>📋 Changelog</h2>
 
+<h3>v1.9.0</h3>
+<ul>
+  <li>📤 <strong>Export reports to CSV & PDF</strong> — directly from the Report page or Tools menu</li>
+  <li>🌙 <strong>Dark Mode</strong> — full theme with live toggle, saved in registry</li>
+  <li>🖼️ <strong>Screenshot Preview</strong> — double-click a report row to open a gallery of its screenshots</li>
+  <li>🎨 Refactored stylesheets into Light and Dark constants</li>
+</ul>
+
 <h3>v1.8.0</h3>
 <ul>
   <li>🎓 <strong>School Instructor</strong> and 🔧 <strong>Mechanic</strong> added as coming-soon factions with full folder structure</li>
@@ -313,6 +334,7 @@
   <tbody>
     <tr><td>GUI</td><td>PySide6 (Qt 6)</td></tr>
     <tr><td>Image Processing</td><td>Pillow</td></tr>
+    <tr><td>PDF Export</td><td>Qt QPrinter (built-in)</td></tr>
     <tr><td>Persistence</td><td>Windows Registry (winreg)</td></tr>
     <tr><td>Packaging</td><td>PyInstaller</td></tr>
     <tr><td>Language</td><td>Python 3.10+</td></tr>
