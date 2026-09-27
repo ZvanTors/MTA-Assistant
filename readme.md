@@ -7,7 +7,7 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.9.1-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.10.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
@@ -41,14 +41,29 @@
 
 <h2>✨ Features</h2>
 
+<h3>🧙 First-Time Setup Wizard</h3>
+<p>New users get a clean <strong>4-step wizard</strong> on first launch: MTA folder → Faction → Rank → Profile &amp; theme. Everything is validated, and you can go back and forth between steps.</p>
+
+<h3>👁️ Preview Before Creating</h3>
+<p>Before starting, a <strong>preview dialog</strong> shows the faction, screenshots count, current PNG size, compression level, <strong>estimated output size</strong>, and <strong>free disk space</strong> with color-coded warnings.</p>
+
+<h3>🛡️ Disk Space Check</h3>
+<p>If there isn't enough free space on the Desktop drive, the app warns you <strong>before</strong> starting — no more half-finished reports.</p>
+
+<h3>🎚️ Adjustable Compression Level</h3>
+<p>Choose how aggressively screenshots get compressed in <strong>Settings</strong>: <strong>250 KB</strong> (default), <strong>200 KB</strong>, or <strong>150 KB</strong> per image. Your choice is remembered forever.</p>
+
+<h3>📁 Create Missing Category Folders</h3>
+<p>A new tool to <strong>auto-create any missing category folders</strong> for your current faction. Existing folders are never touched.</p>
+
 <h3>🔄 Auto-Update</h3>
-<p>Checks for updates automatically every time you launch the app. If a newer version is available, a clean dialog lets you download it with one click — or skip that specific version. Manual check is also available from <strong>Help → Check for Updates...</strong></p>
+<p>Checks for updates automatically every time you launch. If a newer version is available, a clean dialog lets you download it with one click — or skip that specific version. Manual check is also available from <strong>Help → Check for Updates...</strong></p>
 
 <h3>📊 Work Report Calculator</h3>
 <p>Automatically counts your screenshots across all category folders and calculates your total earnings per category — with <strong>faction-specific pricing</strong> applied instantly.</p>
 
 <h3>📦 One-Click Work Report Creation</h3>
-<p>Converts every PNG screenshot to a compressed JPG (max <strong>250 KB</strong> each), packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar</strong> so the app never freezes.</p>
+<p>Converts every PNG screenshot to a compressed JPG, packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar</strong> so the app never freezes.</p>
 
 <h3>📤 Export Reports to CSV &amp; PDF</h3>
 <p>Save your work report as a shareable file — no more screenshots of the table. Export directly to:</p>
@@ -84,7 +99,7 @@
 <p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same. Same goes for <code>Slot-Gun</code>, <code>towcar</code>, and every other category.</p>
 
 <h3>💾 Registry Persistence</h3>
-<p>Your MTA:SA folder, faction, rank, in-game name, and theme are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
+<p>Your MTA:SA folder, faction, rank, in-game name, theme, and compression level are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
 
 <h3>🧹 Clear Work Reports</h3>
 <p>Clean out all screenshot folders in one click — with a confirmation dialog for safety.</p>
@@ -109,8 +124,7 @@
 <ol>
   <li><strong>Download</strong> <code>MTA Assistant.exe</code> from the Releases page.</li>
   <li><strong>Run</strong> it (UAC prompt will appear — click Yes).</li>
-  <li>On first launch, select your <strong>MTA:SA installation folder</strong>.</li>
-  <li>Choose your <strong>faction</strong> and — if needed — your <strong>rank</strong>.</li>
+  <li>The <strong>Setup Wizard</strong> appears on first launch — follow the 4 steps.</li>
   <li>You're ready. Click <strong>Tools</strong> to calculate a work report, create a new one, or export it.</li>
 </ol>
 
@@ -147,7 +161,7 @@
     ├── TakeGun/
     ├── Wanted/
     └── ...</code></pre>
-<p>Folder names are matched <strong>case-insensitively</strong> (<code>arrest</code> = <code>ARREST</code> = <code>Arrest</code>). Missing folders are handled gracefully — no errors.</p>
+<p>Folder names are matched <strong>case-insensitively</strong> (<code>arrest</code> = <code>ARREST</code> = <code>Arrest</code>). Missing folders are handled gracefully — no errors. You can also auto-create missing folders via <strong>Tools → Create Missing Category Folders</strong>.</p>
 
 <hr>
 
@@ -285,6 +299,15 @@
 <hr>
 
 <h2>📋 Changelog</h2>
+
+<h3>v1.10.0</h3>
+<ul>
+  <li>🧙 <strong>First-Time Setup Wizard</strong> — 4 steps with live theme preview and validation</li>
+  <li>👁️ <strong>Preview Before Create</strong> — full pre-create dialog with file count, sizes, and target path</li>
+  <li>🛡️ <strong>Disk Space Check</strong> — warns before starting if the Desktop drive is nearly full</li>
+  <li>🎚️ <strong>Adjustable Compression</strong> — 250 / 200 / 150 KB per image in Settings</li>
+  <li>📁 <strong>Create Missing Category Folders</strong> — new tool to auto-create faction folders</li>
+</ul>
 
 <h3>v1.9.1</h3>
 <ul>
