@@ -26,12 +26,6 @@
 <div align="center">
 
   <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
-    <img src="https://www.aparat.com/video/video/thumbnail/videohash/dus4h5a" alt="MTA Assistant Video Tutorial" width="720" />
-  </a>
-
-  <br><br>
-
-  <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
     <strong>▶  Watch on Aparat</strong>
   </a>
 
