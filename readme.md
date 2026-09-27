@@ -7,7 +7,7 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.9.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.9.1-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
@@ -26,6 +26,12 @@
 <div align="center">
 
   <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
+    <img src="https://www.aparat.com/video/video/thumbnail/videohash/dus4h5a" alt="MTA Assistant Video Tutorial" width="720" />
+  </a>
+
+  <br><br>
+
+  <a href="https://www.aparat.com/v/dus4h5a" target="_blank">
     <strong>▶  Watch on Aparat</strong>
   </a>
 
@@ -34,6 +40,9 @@
 <hr>
 
 <h2>✨ Features</h2>
+
+<h3>🔄 Auto-Update</h3>
+<p>Checks for updates automatically every time you launch the app. If a newer version is available, a clean dialog lets you download it with one click — or skip that specific version. Manual check is also available from <strong>Help → Check for Updates...</strong></p>
 
 <h3>📊 Work Report Calculator</h3>
 <p>Automatically counts your screenshots across all category folders and calculates your total earnings per category — with <strong>faction-specific pricing</strong> applied instantly.</p>
@@ -277,6 +286,13 @@
 
 <h2>📋 Changelog</h2>
 
+<h3>v1.9.1</h3>
+<ul>
+  <li>🔄 <strong>Auto-Update</strong> — silent GitHub release check on launch with clean update dialog</li>
+  <li>🎯 Manual update check from <strong>Help → Check for Updates...</strong></li>
+  <li>💾 <strong>Skip this version</strong> option stored in the registry</li>
+</ul>
+
 <h3>v1.9.0</h3>
 <ul>
   <li>📤 <strong>Export reports to CSV &amp; PDF</strong> — directly from the Report page or Tools menu</li>
@@ -349,6 +365,7 @@
     <tr><td>GUI</td><td>PySide6 (Qt 6)</td></tr>
     <tr><td>Image Processing</td><td>Pillow</td></tr>
     <tr><td>PDF Export</td><td>Qt QPrinter (built-in)</td></tr>
+    <tr><td>Auto-Update</td><td>GitHub Releases API (urllib)</td></tr>
     <tr><td>Persistence</td><td>Windows Registry (winreg)</td></tr>
     <tr><td>Packaging</td><td>PyInstaller</td></tr>
     <tr><td>Language</td><td>Python 3.10+</td></tr>
