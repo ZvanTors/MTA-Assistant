@@ -1,27 +1,29 @@
 """
-MTA Assistant - v1.9.0  ( Made By AmooReza )
+MTA Assistant - v1.9.1  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
 import csv
 import io
+import json
 import os
 import sys
 import shutil
+import urllib.request
+import urllib.error
 import winreg
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal, QSize
-from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument
+from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal, QSize, QUrl, QTimer, QMarginsF
+from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument, QDesktopServices, QPageSize, QPageLayout
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtCore import QMarginsF
-from PySide6.QtGui import QPageSize, QPageLayout
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QRadioButton, QButtonGroup, QProgressBar, QScrollArea, QGridLayout
+    QRadioButton, QButtonGroup, QProgressBar, QScrollArea, QGridLayout,
+    QCheckBox
 )
 
 try:
@@ -34,16 +36,20 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
+
+GITHUB_REPO = "ZvanTors/MTA-Assistant"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 REG_PATH = r"Software\MTA Assistant"
 REG_VALUE_FOLDER = "MTAFolder"
 REG_VALUE_NAME = "GameName"
 REG_VALUE_FACTION = "Faction"
 REG_VALUE_RANK = "Rank"
-REG_VALUE_THEME = "Theme"   # "light" or "dark"
+REG_VALUE_THEME = "Theme"
+REG_VALUE_SKIPPED_VERSION = "SkippedVersion"
 
 MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
 
@@ -146,12 +152,6 @@ DEFAULT_FACTION = "Police Federal"
 DEFAULT_RANK = "Rank 1"
 DEFAULT_THEME = "light"
 
-COMING_SOON_MESSAGE = (
-    "Prices for this faction have not been announced yet.\n\n"
-    "This feature will be added in a future update.\n\n"
-    "You can change your faction anytime from Settings."
-)
-
 
 def is_coming_soon(faction: str) -> bool:
     return faction in COMING_SOON_FACTIONS
@@ -169,6 +169,28 @@ def get_prices(faction: str, rank: str | None = None):
 
 def faction_requires_rank(faction: str) -> bool:
     return faction in RANK_BASED_FACTIONS
+
+
+# ---------------------------------------------------------------------------
+# Version helpers (for auto-update)
+# ---------------------------------------------------------------------------
+def parse_version(v: str) -> tuple:
+    """Parse a version string like 'v1.2.3' into a tuple (1, 2, 3)."""
+    v = (v or "").strip().lstrip("vV")
+    parts = []
+    for chunk in v.split("."):
+        num = ""
+        for ch in chunk:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        parts.append(int(num) if num else 0)
+    return tuple(parts)
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    return parse_version(latest) > parse_version(current)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +273,14 @@ def get_saved_theme() -> str:
 
 def save_theme(theme: str) -> None:
     _write_value(REG_VALUE_THEME, theme)
+
+
+def get_skipped_version() -> str | None:
+    return _read_value(REG_VALUE_SKIPPED_VERSION)
+
+
+def save_skipped_version(version: str) -> None:
+    _write_value(REG_VALUE_SKIPPED_VERSION, version)
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +635,139 @@ class ConvertWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Update checker (background)
+# ---------------------------------------------------------------------------
+class UpdateChecker(QThread):
+    """Fetches the latest release info from GitHub in the background."""
+    update_available = Signal(str, str, str)   # latest_version, download_url, release_url
+    no_update = Signal()
+    check_failed = Signal(str)
+
+    def __init__(self, current_version: str, parent=None):
+        super().__init__(parent)
+        self.current_version = current_version
+
+    def run(self) -> None:
+        try:
+            req = urllib.request.Request(
+                GITHUB_API_URL,
+                headers={
+                    "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+        except Exception as exc:
+            self.check_failed.emit(str(exc))
+            return
+
+        latest_tag = (data.get("tag_name") or "").strip()
+        if not latest_tag:
+            self.check_failed.emit("No tag_name in release response.")
+            return
+
+        latest_version = latest_tag.lstrip("vV")
+        if not is_newer_version(latest_version, self.current_version):
+            self.no_update.emit()
+            return
+
+        release_url = data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases"
+
+        # Find the .exe asset (fallback to release page)
+        download_url = ""
+        for asset in data.get("assets", []) or []:
+            name = (asset.get("name") or "").lower()
+            if name.endswith(".exe"):
+                url = asset.get("browser_download_url") or ""
+                if url.startswith("https://"):
+                    download_url = url
+                    break
+
+        if not download_url:
+            download_url = release_url
+
+        self.update_available.emit(latest_version, download_url, release_url)
+
+
+# ---------------------------------------------------------------------------
+# Update dialog
+# ---------------------------------------------------------------------------
+class UpdateDialog(QDialog):
+    def __init__(self, parent, latest_version: str,
+                 download_url: str, release_url: str):
+        super().__init__(parent)
+        self.latest_version = latest_version
+        self.download_url = download_url
+        self.release_url = release_url
+        self.skip_version = False
+
+        self.setWindowTitle("Update Available")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(14)
+
+        title = QLabel("🎉 A new version is available!")
+        title.setStyleSheet("font-size: 17px; font-weight: bold;")
+        root.addWidget(title)
+
+        info = QLabel(
+            f"<b>Current version:</b> v{APP_VERSION}<br>"
+            f"<b>Latest version:</b> v{self.latest_version}<br><br>"
+            "Would you like to download the latest version now?"
+        )
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.skip_check = QCheckBox("Skip this version")
+        root.addWidget(self.skip_check)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+
+        later_btn = QPushButton("Later")
+        later_btn.setObjectName("secondaryButton")
+        later_btn.setMinimumHeight(36)
+        later_btn.setMinimumWidth(100)
+        later_btn.clicked.connect(self.reject)
+        btns.addWidget(later_btn)
+
+        download_btn = QPushButton("Download Now")
+        download_btn.setMinimumHeight(36)
+        download_btn.setMinimumWidth(140)
+        download_btn.setDefault(True)
+        download_btn.clicked.connect(self._on_download)
+        btns.addWidget(download_btn)
+
+        root.addLayout(btns)
+
+    def _on_download(self) -> None:
+        QDesktopServices.openUrl(QUrl(self.download_url))
+        self.accept()
+
+    def _capture_skip(self) -> None:
+        self.skip_version = self.skip_check.isChecked()
+
+    def accept(self) -> None:
+        self._capture_skip()
+        super().accept()
+
+    def reject(self) -> None:
+        self._capture_skip()
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        self._capture_skip()
+        super().closeEvent(event)
+
+
+# ---------------------------------------------------------------------------
 # Clear work reports
 # ---------------------------------------------------------------------------
 def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
@@ -686,6 +849,15 @@ QSS_LIGHT = """
     }
     QRadioButton::indicator:hover { border-color: #3498db; }
     QRadioButton::indicator:checked { border: 5px solid #3498db; background: white; }
+    QCheckBox { color: #2c3e50; spacing: 8px; }
+    QCheckBox::indicator {
+        width: 16px; height: 16px; border: 2px solid #b0bec5;
+        border-radius: 4px; background: white;
+    }
+    QCheckBox::indicator:hover { border-color: #3498db; }
+    QCheckBox::indicator:checked {
+        background: #3498db; border-color: #3498db;
+    }
     QFrame#card {
         background: #ffffff; border: 1px solid #e1e8ed; border-radius: 10px;
     }
@@ -750,6 +922,15 @@ QSS_DARK = """
     }
     QRadioButton::indicator:hover { border-color: #4a9eff; }
     QRadioButton::indicator:checked { border: 5px solid #4a9eff; background: #252540; }
+    QCheckBox { color: #e8e8f0; spacing: 8px; }
+    QCheckBox::indicator {
+        width: 16px; height: 16px; border: 2px solid #555570;
+        border-radius: 4px; background: #252540;
+    }
+    QCheckBox::indicator:hover { border-color: #4a9eff; }
+    QCheckBox::indicator:checked {
+        background: #4a9eff; border-color: #4a9eff;
+    }
     QFrame#card {
         background: #252540; border: 1px solid #353555; border-radius: 10px;
     }
@@ -1128,9 +1309,7 @@ class ScreenshotPreviewDialog(QDialog):
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(12)
 
-        header = QLabel(
-            f"<b>{category_name}</b> — {len(png_files)} screenshot(s)"
-        )
+        header = QLabel(f"<b>{category_name}</b> — {len(png_files)} screenshot(s)")
         header.setStyleSheet("font-size: 15px;")
         root.addWidget(header)
 
@@ -1153,9 +1332,7 @@ class ScreenshotPreviewDialog(QDialog):
             thumb = self._make_thumbnail(png)
             grid.addWidget(thumb, i // cols, i % cols)
 
-        # Push grid to top
         grid.setRowStretch(grid.rowCount(), 1)
-
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
 
@@ -1202,7 +1379,6 @@ class ScreenshotPreviewDialog(QDialog):
         name_label.setFixedHeight(18)
         v.addWidget(name_label)
 
-        # Make thumbnail clickable to open in default viewer
         box.setCursor(Qt.PointingHandCursor)
         box.mouseDoubleClickEvent = lambda ev, p=png_path: self._open_file(p)
         img_label.mouseDoubleClickEvent = lambda ev, p=png_path: self._open_file(p)
@@ -1211,7 +1387,7 @@ class ScreenshotPreviewDialog(QDialog):
 
     def _open_file(self, path: Path) -> None:
         try:
-            os.startfile(str(path))  # Windows-only
+            os.startfile(str(path))
         except Exception as exc:
             QMessageBox.warning(
                 self, "Cannot Open File",
@@ -1234,6 +1410,7 @@ class MainWindow(QMainWindow):
 
         self._convert_worker: ConvertWorker | None = None
         self._convert_dialog: ProgressDialog | None = None
+        self._update_checker: UpdateChecker | None = None
         self._last_results: list | None = None
 
         self.setWindowTitle(APP_TITLE)
@@ -1311,6 +1488,10 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.act_theme)
 
         help_menu = menubar.addMenu("Help")
+        act_check_updates = QAction("Check for Updates...", self)
+        act_check_updates.triggered.connect(self.check_for_updates_manual)
+        help_menu.addAction(act_check_updates)
+
         act_about = QAction(f"About {APP_NAME}", self)
         act_about.triggered.connect(self.show_about)
         help_menu.addAction(act_about)
@@ -1612,7 +1793,6 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.settings_name_card)
 
-        # Theme card
         self.settings_theme_card, self.settings_theme_label, self.settings_theme_btn = make_setting_card(
             "Appearance", "Switch Theme", self.toggle_theme
         )
@@ -1644,7 +1824,6 @@ class MainWindow(QMainWindow):
         self.home_name_label.setText(name_display)
         self.settings_name_label.setText(name_display)
 
-        # Theme label
         theme_display = "Dark" if self.theme == "dark" else "Light"
         self.settings_theme_label.setText(f"Current theme: {theme_display}")
 
@@ -1735,14 +1914,12 @@ class MainWindow(QMainWindow):
             return
         display_name = item.text()
 
-        # Find matching key from current faction prices
         key = None
         for name, k, _ in get_prices(self.faction, self.rank):
             if name == display_name:
                 key = k
                 break
         if key is None:
-            # Coming-soon factions: fall back to lowercase name
             for cn, k in COMING_SOON_FACTIONS.get(self.faction, []):
                 if cn == display_name:
                     key = k
@@ -1795,10 +1972,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Error", f"Failed to export CSV:\n{exc}")
             return
 
-        QMessageBox.information(
-            self, "Export Successful",
-            f"CSV report saved to:\n{path}"
-        )
+        QMessageBox.information(self, "Export Successful",
+                                f"CSV report saved to:\n{path}")
 
     def export_pdf(self) -> None:
         if not self._ensure_report():
@@ -1825,10 +2000,70 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Error", f"Failed to export PDF:\n{exc}")
             return
 
-        QMessageBox.information(
-            self, "Export Successful",
-            f"PDF report saved to:\n{path}"
-        )
+        QMessageBox.information(self, "Export Successful",
+                                f"PDF report saved to:\n{path}")
+
+    # ---------------- Auto-Update ----------------
+    def check_for_updates_manual(self) -> None:
+        """Manual check triggered from the Help menu."""
+        checker = UpdateChecker(APP_VERSION, self)
+        self._update_checker = checker
+
+        def on_available(latest, dl_url, rel_url):
+            dlg = UpdateDialog(self, latest, dl_url, rel_url)
+            dlg.exec()
+            if dlg.skip_version:
+                try:
+                    save_skipped_version(latest)
+                except OSError:
+                    pass
+
+        def on_no_update():
+            QMessageBox.information(
+                self, "No Updates",
+                f"You're already using the latest version (v{APP_VERSION})."
+            )
+
+        def on_failed(msg):
+            QMessageBox.warning(
+                self, "Update Check Failed",
+                "Could not check for updates. Please check your internet "
+                f"connection.\n\nDetails:\n{msg}"
+            )
+
+        checker.update_available.connect(on_available)
+        checker.no_update.connect(on_no_update)
+        checker.check_failed.connect(on_failed)
+        checker.start()
+
+    def check_for_updates_silent(self) -> None:
+        """Silent check triggered at startup. Only shows dialog if update found."""
+        skipped = get_skipped_version()
+        checker = UpdateChecker(APP_VERSION, self)
+        self._update_checker = checker
+
+        def on_available(latest, dl_url, rel_url):
+            if skipped and not is_newer_version(latest, skipped):
+                return
+            dlg = UpdateDialog(self, latest, dl_url, rel_url)
+            dlg.exec()
+            if dlg.skip_version:
+                try:
+                    save_skipped_version(latest)
+                except OSError:
+                    pass
+
+        def on_no_update():
+            pass  # silent
+
+        def on_failed(msg):
+            # Silent fail — likely offline
+            print(f"[AutoUpdate] Check failed: {msg}")
+
+        checker.update_available.connect(on_available)
+        checker.no_update.connect(on_no_update)
+        checker.check_failed.connect(on_failed)
+        checker.start()
 
     # ---------------- Theme ----------------
     def _update_theme_button_text(self) -> None:
@@ -1864,10 +2099,8 @@ class MainWindow(QMainWindow):
         try:
             save_name(dlg.name_value)
         except OSError as exc:
-            QMessageBox.critical(
-                self, "Registry Error",
-                f"Failed to save the game name in the registry:\n{exc}"
-            )
+            QMessageBox.critical(self, "Registry Error",
+                                 f"Failed to save the game name:\n{exc}")
             return None
         self.game_name = dlg.name_value
         self._refresh_labels()
@@ -2085,14 +2318,15 @@ class MainWindow(QMainWindow):
             f"<b>{APP_NAME}</b> — v{APP_VERSION}<br>"
             f"<i>Made By {APP_AUTHOR}</i><br><br>"
             "A small utility for MTA:SA players.<br>"
-            "• Stores the MTA:SA folder, faction, rank and game name in the "
+            "• Stores the MTA:SA folder, faction, rank, and game name in the "
             "Windows registry.<br>"
             "• Calculates a work report using faction- and rank-specific prices.<br>"
             "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
             "a zipped work report on the Desktop.<br>"
             "• Exports reports to CSV or PDF.<br>"
             "• Previews screenshots by double-clicking a category row.<br>"
-            "• Supports both Light and Dark themes."
+            "• Supports both Light and Dark themes.<br>"
+            "• Automatically checks for updates on launch."
         )
 
 
@@ -2160,6 +2394,10 @@ def main() -> int:
     if icon_path.exists():
         window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
+
+    # Silent update check ~2 seconds after the UI is ready
+    QTimer.singleShot(2000, window.check_for_updates_silent)
+
     return app.exec()
 
 
