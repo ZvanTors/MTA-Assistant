@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.10.0  ( Made By AmooReza )
+MTA Assistant - v1.10.2  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import shutil
+import time
 import urllib.request
 import urllib.error
 import winreg
@@ -16,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal, QSize, QUrl, QTimer, QMarginsF
-from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument, QDesktopServices, QPageSize, QPageLayout
+from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument, QDesktopServices, QPageSize, QPageLayout, QCursor
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -36,7 +37,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.10.2"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -50,10 +51,12 @@ REG_VALUE_FACTION = "Faction"
 REG_VALUE_RANK = "Rank"
 REG_VALUE_THEME = "Theme"
 REG_VALUE_SKIPPED_VERSION = "SkippedVersion"
-REG_VALUE_COMPRESSION = "CompressionLevel"   # in KB: 250 / 200 / 150
+REG_VALUE_COMPRESSION = "CompressionLevel"
 
 COMPRESSION_LEVELS = [250, 200, 150]
 DEFAULT_COMPRESSION = 250
+
+HINT_COLOR = "#6b7c93"
 
 # --- Static factions ---
 FACTIONS = {
@@ -81,7 +84,6 @@ FACTIONS = {
     ],
 }
 
-# --- Rank-based factions ---
 MEDIC_RANKS = {
     "Rank 1": [("Heal", "heal", 6300), ("Service", "service", 5000)],
     "Rank 2": [("Heal", "heal", 7000), ("Service", "service", 6000)],
@@ -121,7 +123,6 @@ RANK_BASED_FACTIONS = {
     "New Reporter": NEW_REPORTER_RANKS,
 }
 
-# --- Coming soon factions ---
 COMING_SOON_FACTIONS = {
     "School Instructor": [
         ("Mojavez",  "mojavez"),
@@ -154,6 +155,11 @@ DEFAULT_FACTION = "Police Federal"
 DEFAULT_RANK = "Rank 1"
 DEFAULT_THEME = "light"
 
+STAT_BAR_PALETTE = [
+    "#3498db", "#e74c3c", "#27ae60",
+    "#f39c12", "#9b59b6", "#1abc9c", "#e67e22",
+]
+
 
 def is_coming_soon(faction: str) -> bool:
     return faction in COMING_SOON_FACTIONS
@@ -174,7 +180,6 @@ def faction_requires_rank(faction: str) -> bool:
 
 
 def get_faction_folder_specs(faction: str):
-    """Return list of (display_name, key) for a faction regardless of type."""
     if faction in COMING_SOON_FACTIONS:
         return list(COMING_SOON_FACTIONS[faction])
     if faction in RANK_BASED_FACTIONS:
@@ -215,6 +220,20 @@ def format_size(bytes_: int) -> str:
     if bytes_ < 1024 * 1024 * 1024:
         return f"{bytes_ / (1024 * 1024):.1f} MB"
     return f"{bytes_ / (1024 * 1024 * 1024):.2f} GB"
+
+
+def format_eta(seconds: float) -> str:
+    if seconds <= 1:
+        return "less than a second"
+    if seconds < 60:
+        return f"~{int(seconds)} seconds"
+    if seconds < 3600:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"~{m}m {s}s"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    return f"~{h}h {m}m"
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +406,6 @@ def _list_pngs_for_category(base_folder: str, key: str) -> list[Path]:
 
 
 def estimate_png_size(base_folder: str, faction: str, rank: str | None = None) -> int:
-    """Total size (bytes) of all PNGs across the current faction's categories."""
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return 0
@@ -413,18 +431,12 @@ def estimate_png_size(base_folder: str, faction: str, rank: str | None = None) -
 
 
 def estimate_output_size(total_png_bytes: int, file_count: int, max_kb: int) -> int:
-    """Conservative estimate of the final zip size."""
     worst_case = file_count * max_kb * 1024
     likely = min(total_png_bytes, worst_case) if total_png_bytes > 0 else worst_case
-    # Add ~5% overhead for zip archive
     return int(likely * 1.05)
 
 
 def create_faction_folders(base_folder: str, faction: str):
-    """
-    Create missing category folders inside the screenshots directory.
-    Returns (created_count, skipped_count, error).
-    """
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         try:
@@ -752,7 +764,7 @@ class ConvertWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Update checker (background)
+# Update checker
 # ---------------------------------------------------------------------------
 class UpdateChecker(QThread):
     update_available = Signal(str, str, str)
@@ -807,9 +819,196 @@ class UpdateChecker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Stylesheets — Light & Dark
+# ---------------------------------------------------------------------------
+QSS_LIGHT = """
+    QMainWindow, QDialog { background: #f7f9fb; }
+    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #2c3e50; }
+    QMenuBar { background: #ffffff; border-bottom: 1px solid #e1e8ed; }
+    QMenuBar::item { padding: 6px 12px; background: transparent; }
+    QMenuBar::item:selected { background: #eaf4fc; border-radius: 4px; }
+    QMenu { background: #ffffff; border: 1px solid #e1e8ed; padding: 4px; }
+    QMenu::item { padding: 6px 22px; border-radius: 4px; }
+    QMenu::item:selected { background: #eaf4fc; }
+    QMenu::item:disabled { color: #b0bec5; }
+    QPushButton {
+        background: #3498db; color: white; border: none;
+        border-radius: 6px; padding: 8px 18px; font-weight: 600;
+    }
+    QPushButton:hover { background: #2980b9; }
+    QPushButton:pressed { background: #2471a3; }
+    QPushButton:disabled { background: #bdc3c7; }
+    QPushButton#secondaryButton { background: #ecf0f1; color: #2c3e50; }
+    QPushButton#secondaryButton:hover { background: #dfe4e6; }
+    QPushButton#backButton {
+        background: #ecf0f1; color: #2c3e50; padding: 6px 14px; font-weight: 500;
+    }
+    QPushButton#backButton:hover { background: #dfe4e6; }
+    QPushButton#dangerButton { background: #e74c3c; color: white; }
+    QPushButton#dangerButton:hover { background: #c0392b; }
+    QPushButton#dangerButton:pressed { background: #a93226; }
+    QPushButton#dangerButton:disabled { background: #e6b0aa; }
+    QLineEdit {
+        background: #ffffff; border: 1px solid #d6dee6; border-radius: 6px;
+        padding: 6px 10px; selection-background-color: #3498db;
+    }
+    QLineEdit:focus { border: 1px solid #3498db; }
+    QRadioButton { color: #2c3e50; spacing: 10px; }
+    QRadioButton::indicator {
+        width: 16px; height: 16px; border: 2px solid #b0bec5;
+        border-radius: 9px; background: white;
+    }
+    QRadioButton::indicator:hover { border-color: #3498db; }
+    QRadioButton::indicator:checked { border: 5px solid #3498db; background: white; }
+    QCheckBox { color: #2c3e50; spacing: 8px; }
+    QCheckBox::indicator {
+        width: 16px; height: 16px; border: 2px solid #b0bec5;
+        border-radius: 4px; background: white;
+    }
+    QCheckBox::indicator:hover { border-color: #3498db; }
+    QCheckBox::indicator:checked { background: #3498db; border-color: #3498db; }
+    QFrame#card {
+        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 10px;
+    }
+    QProgressBar {
+        background: #ecf0f1; border: 1px solid #d6dee6; border-radius: 6px;
+        text-align: center; color: #2c3e50; font-weight: 600; height: 22px;
+    }
+    QProgressBar::chunk { background: #3498db; border-radius: 5px; }
+    QTableWidget {
+        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 8px;
+        gridline-color: #eef2f5; alternate-background-color: #f7fafc;
+        font-size: 13px;
+    }
+    QTableWidget::item { padding: 6px; }
+    QTableWidget::item:selected { background: #eaf4fc; color: #2c3e50; }
+    QHeaderView::section {
+        background: #3498db; color: white; padding: 10px;
+        border: none; font-weight: bold;
+    }
+    QHeaderView::section:first { border-top-left-radius: 8px; }
+    QHeaderView::section:last { border-top-right-radius: 8px; }
+    QScrollArea { background: #f7f9fb; border: none; }
+    QScrollArea > QWidget > QWidget { background: #f7f9fb; }
+    QLabel#summaryLabel {
+        font-size: 15px; font-weight: bold; color: #2c3e50;
+        background: #eaf4fc; padding: 12px 16px; border-radius: 8px;
+    }
+    QLabel#hintLabel { color: #6b7c93; }
+"""
+
+QSS_DARK = """
+    QMainWindow, QDialog { background: #1a1a2e; }
+    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #e8e8f0; }
+    QMenuBar { background: #252540; border-bottom: 1px solid #353555; color: #e8e8f0; }
+    QMenuBar::item { padding: 6px 12px; background: transparent; }
+    QMenuBar::item:selected { background: #353555; border-radius: 4px; }
+    QMenu { background: #252540; border: 1px solid #353555; padding: 4px; color: #e8e8f0; }
+    QMenu::item { padding: 6px 22px; border-radius: 4px; }
+    QMenu::item:selected { background: #353555; }
+    QMenu::item:disabled { color: #555570; }
+    QPushButton {
+        background: #4a9eff; color: white; border: none;
+        border-radius: 6px; padding: 8px 18px; font-weight: 600;
+    }
+    QPushButton:hover { background: #3a8eef; }
+    QPushButton:pressed { background: #2a7edf; }
+    QPushButton:disabled { background: #3a3a4e; color: #777788; }
+    QPushButton#secondaryButton { background: #353555; color: #e8e8f0; }
+    QPushButton#secondaryButton:hover { background: #404060; }
+    QPushButton#backButton {
+        background: #353555; color: #e8e8f0; padding: 6px 14px; font-weight: 500;
+    }
+    QPushButton#backButton:hover { background: #404060; }
+    QPushButton#dangerButton { background: #e74c3c; color: white; }
+    QPushButton#dangerButton:hover { background: #c0392b; }
+    QPushButton#dangerButton:pressed { background: #a93226; }
+    QPushButton#dangerButton:disabled { background: #5a3a3a; color: #a08080; }
+    QLineEdit {
+        background: #252540; border: 1px solid #353555; border-radius: 6px;
+        padding: 6px 10px; color: #e8e8f0; selection-background-color: #4a9eff;
+    }
+    QLineEdit:focus { border: 1px solid #4a9eff; }
+    QRadioButton { color: #e8e8f0; spacing: 10px; }
+    QRadioButton::indicator {
+        width: 16px; height: 16px; border: 2px solid #555570;
+        border-radius: 9px; background: #252540;
+    }
+    QRadioButton::indicator:hover { border-color: #4a9eff; }
+    QRadioButton::indicator:checked { border: 5px solid #4a9eff; background: #252540; }
+    QCheckBox { color: #e8e8f0; spacing: 8px; }
+    QCheckBox::indicator {
+        width: 16px; height: 16px; border: 2px solid #555570;
+        border-radius: 4px; background: #252540;
+    }
+    QCheckBox::indicator:hover { border-color: #4a9eff; }
+    QCheckBox::indicator:checked { background: #4a9eff; border-color: #4a9eff; }
+    QFrame#card {
+        background: #252540; border: 1px solid #353555; border-radius: 10px;
+    }
+    QProgressBar {
+        background: #353555; border: 1px solid #454565; border-radius: 6px;
+        text-align: center; color: #e8e8f0; font-weight: 600; height: 22px;
+    }
+    QProgressBar::chunk { background: #4a9eff; border-radius: 5px; }
+    QTableWidget {
+        background: #252540; border: 1px solid #353555; border-radius: 8px;
+        gridline-color: #353555; alternate-background-color: #2a2a48;
+        font-size: 13px; color: #e8e8f0;
+    }
+    QTableWidget::item { padding: 6px; }
+    QTableWidget::item:selected { background: #353570; color: #ffffff; }
+    QHeaderView::section {
+        background: #4a9eff; color: white; padding: 10px;
+        border: none; font-weight: bold;
+    }
+    QHeaderView::section:first { border-top-left-radius: 8px; }
+    QHeaderView::section:last { border-top-right-radius: 8px; }
+    QScrollArea { background: #1a1a2e; border: none; }
+    QScrollArea > QWidget > QWidget { background: #1a1a2e; }
+    QLabel { color: #e8e8f0; }
+    QLabel#summaryLabel {
+        font-size: 15px; font-weight: bold; color: #e8e8f0;
+        background: #353555; padding: 12px 16px; border-radius: 8px;
+    }
+    QLabel#hintLabel { color: #9aa3b2; }
+"""
+
+
+# ---------------------------------------------------------------------------
+# Centered Dialog base
+# ---------------------------------------------------------------------------
+class CenteredDialog(QDialog):
+    """QDialog that automatically centers itself on its parent (or the
+    screen under the mouse cursor) when shown."""
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._center_on_parent)
+
+    def _center_on_parent(self) -> None:
+        parent = self.parentWidget()
+        if parent is not None and parent.isVisible():
+            try:
+                parent_rect = parent.frameGeometry()
+                self_rect = self.frameGeometry()
+                self_rect.moveCenter(parent_rect.center())
+                self.move(self_rect.topLeft())
+                return
+            except Exception:
+                pass
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self_rect = self.frameGeometry()
+            self_rect.moveCenter(geo.center())
+            self.move(self_rect.topLeft())
+
+
+# ---------------------------------------------------------------------------
 # Update dialog
 # ---------------------------------------------------------------------------
-class UpdateDialog(QDialog):
+class UpdateDialog(CenteredDialog):
     def __init__(self, parent, latest_version: str,
                  download_url: str, release_url: str):
         super().__init__(parent)
@@ -883,200 +1082,9 @@ class UpdateDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Clear work reports
+# Setup Wizard
 # ---------------------------------------------------------------------------
-def clear_work_reports(base_folder: str, faction: str, rank: str | None = None):
-    screenshots_dir = Path(base_folder) / "screenshots"
-    if not screenshots_dir.is_dir():
-        return None, (
-            "The 'screenshots' folder was not found at:\n"
-            f"{screenshots_dir}"
-        )
-    try:
-        subdirs = _collect_category_dirs(screenshots_dir)
-    except OSError as exc:
-        return None, f"Failed to read the screenshots folder:\n{exc}"
-
-    deleted = 0
-    errors: list[str] = []
-    for display_name, key, _ in get_prices(faction, rank):
-        cat = subdirs.get(key)
-        if cat is None:
-            continue
-        try:
-            for item in cat.rglob("*"):
-                if item.is_file():
-                    try:
-                        item.unlink()
-                        deleted += 1
-                    except OSError as exc:
-                        errors.append(f"{item.name}: {exc}")
-        except OSError as exc:
-            errors.append(f"{display_name}: {exc}")
-
-    if errors:
-        summary = "\n".join(errors[:5])
-        if len(errors) > 5:
-            summary += f"\n... and {len(errors) - 5} more errors."
-        return deleted, summary
-    return deleted, None
-
-
-# ---------------------------------------------------------------------------
-# Stylesheets — Light & Dark
-# ---------------------------------------------------------------------------
-QSS_LIGHT = """
-    QMainWindow, QDialog { background: #f7f9fb; }
-    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #2c3e50; }
-    QMenuBar { background: #ffffff; border-bottom: 1px solid #e1e8ed; }
-    QMenuBar::item { padding: 6px 12px; background: transparent; }
-    QMenuBar::item:selected { background: #eaf4fc; border-radius: 4px; }
-    QMenu { background: #ffffff; border: 1px solid #e1e8ed; padding: 4px; }
-    QMenu::item { padding: 6px 22px; border-radius: 4px; }
-    QMenu::item:selected { background: #eaf4fc; }
-    QMenu::item:disabled { color: #b0bec5; }
-    QPushButton {
-        background: #3498db; color: white; border: none;
-        border-radius: 6px; padding: 8px 18px; font-weight: 600;
-    }
-    QPushButton:hover { background: #2980b9; }
-    QPushButton:pressed { background: #2471a3; }
-    QPushButton:disabled { background: #bdc3c7; }
-    QPushButton#secondaryButton { background: #ecf0f1; color: #2c3e50; }
-    QPushButton#secondaryButton:hover { background: #dfe4e6; }
-    QPushButton#backButton {
-        background: #ecf0f1; color: #2c3e50; padding: 6px 14px; font-weight: 500;
-    }
-    QPushButton#backButton:hover { background: #dfe4e6; }
-    QPushButton#dangerButton { background: #e74c3c; color: white; }
-    QPushButton#dangerButton:hover { background: #c0392b; }
-    QPushButton#dangerButton:pressed { background: #a93226; }
-    QPushButton#dangerButton:disabled { background: #e6b0aa; }
-    QLineEdit {
-        background: #ffffff; border: 1px solid #d6dee6; border-radius: 6px;
-        padding: 6px 10px; selection-background-color: #3498db;
-    }
-    QLineEdit:focus { border: 1px solid #3498db; }
-    QRadioButton { color: #2c3e50; spacing: 10px; }
-    QRadioButton::indicator {
-        width: 16px; height: 16px; border: 2px solid #b0bec5;
-        border-radius: 9px; background: white;
-    }
-    QRadioButton::indicator:hover { border-color: #3498db; }
-    QRadioButton::indicator:checked { border: 5px solid #3498db; background: white; }
-    QCheckBox { color: #2c3e50; spacing: 8px; }
-    QCheckBox::indicator {
-        width: 16px; height: 16px; border: 2px solid #b0bec5;
-        border-radius: 4px; background: white;
-    }
-    QCheckBox::indicator:hover { border-color: #3498db; }
-    QCheckBox::indicator:checked {
-        background: #3498db; border-color: #3498db;
-    }
-    QFrame#card {
-        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 10px;
-    }
-    QProgressBar {
-        background: #ecf0f1; border: 1px solid #d6dee6; border-radius: 6px;
-        text-align: center; color: #2c3e50; font-weight: 600; height: 22px;
-    }
-    QProgressBar::chunk { background: #3498db; border-radius: 5px; }
-    QTableWidget {
-        background: #ffffff; border: 1px solid #e1e8ed; border-radius: 8px;
-        gridline-color: #eef2f5; alternate-background-color: #f7fafc;
-        font-size: 13px;
-    }
-    QTableWidget::item { padding: 6px; }
-    QTableWidget::item:selected { background: #eaf4fc; color: #2c3e50; }
-    QHeaderView::section {
-        background: #3498db; color: white; padding: 10px;
-        border: none; font-weight: bold;
-    }
-    QHeaderView::section:first { border-top-left-radius: 8px; }
-    QHeaderView::section:last { border-top-right-radius: 8px; }
-    QScrollArea { background: #f7f9fb; border: none; }
-    QScrollArea > QWidget > QWidget { background: #f7f9fb; }
-"""
-
-QSS_DARK = """
-    QMainWindow, QDialog { background: #1a1a2e; }
-    QWidget { font-family: "Segoe UI"; font-size: 13px; color: #e8e8f0; }
-    QMenuBar { background: #252540; border-bottom: 1px solid #353555; color: #e8e8f0; }
-    QMenuBar::item { padding: 6px 12px; background: transparent; }
-    QMenuBar::item:selected { background: #353555; border-radius: 4px; }
-    QMenu { background: #252540; border: 1px solid #353555; padding: 4px; color: #e8e8f0; }
-    QMenu::item { padding: 6px 22px; border-radius: 4px; }
-    QMenu::item:selected { background: #353555; }
-    QMenu::item:disabled { color: #555570; }
-    QPushButton {
-        background: #4a9eff; color: white; border: none;
-        border-radius: 6px; padding: 8px 18px; font-weight: 600;
-    }
-    QPushButton:hover { background: #3a8eef; }
-    QPushButton:pressed { background: #2a7edf; }
-    QPushButton:disabled { background: #3a3a4e; color: #777788; }
-    QPushButton#secondaryButton { background: #353555; color: #e8e8f0; }
-    QPushButton#secondaryButton:hover { background: #404060; }
-    QPushButton#backButton {
-        background: #353555; color: #e8e8f0; padding: 6px 14px; font-weight: 500;
-    }
-    QPushButton#backButton:hover { background: #404060; }
-    QPushButton#dangerButton { background: #e74c3c; color: white; }
-    QPushButton#dangerButton:hover { background: #c0392b; }
-    QPushButton#dangerButton:pressed { background: #a93226; }
-    QPushButton#dangerButton:disabled { background: #5a3a3a; color: #a08080; }
-    QLineEdit {
-        background: #252540; border: 1px solid #353555; border-radius: 6px;
-        padding: 6px 10px; color: #e8e8f0; selection-background-color: #4a9eff;
-    }
-    QLineEdit:focus { border: 1px solid #4a9eff; }
-    QRadioButton { color: #e8e8f0; spacing: 10px; }
-    QRadioButton::indicator {
-        width: 16px; height: 16px; border: 2px solid #555570;
-        border-radius: 9px; background: #252540;
-    }
-    QRadioButton::indicator:hover { border-color: #4a9eff; }
-    QRadioButton::indicator:checked { border: 5px solid #4a9eff; background: #252540; }
-    QCheckBox { color: #e8e8f0; spacing: 8px; }
-    QCheckBox::indicator {
-        width: 16px; height: 16px; border: 2px solid #555570;
-        border-radius: 4px; background: #252540;
-    }
-    QCheckBox::indicator:hover { border-color: #4a9eff; }
-    QCheckBox::indicator:checked {
-        background: #4a9eff; border-color: #4a9eff;
-    }
-    QFrame#card {
-        background: #252540; border: 1px solid #353555; border-radius: 10px;
-    }
-    QProgressBar {
-        background: #353555; border: 1px solid #454565; border-radius: 6px;
-        text-align: center; color: #e8e8f0; font-weight: 600; height: 22px;
-    }
-    QProgressBar::chunk { background: #4a9eff; border-radius: 5px; }
-    QTableWidget {
-        background: #252540; border: 1px solid #353555; border-radius: 8px;
-        gridline-color: #353555; alternate-background-color: #2a2a48;
-        font-size: 13px; color: #e8e8f0;
-    }
-    QTableWidget::item { padding: 6px; }
-    QTableWidget::item:selected { background: #353570; color: #ffffff; }
-    QHeaderView::section {
-        background: #4a9eff; color: white; padding: 10px;
-        border: none; font-weight: bold;
-    }
-    QHeaderView::section:first { border-top-left-radius: 8px; }
-    QHeaderView::section:last { border-top-right-radius: 8px; }
-    QScrollArea { background: #1a1a2e; border: none; }
-    QScrollArea > QWidget > QWidget { background: #1a1a2e; }
-    QLabel { color: #e8e8f0; }
-"""
-
-
-# ---------------------------------------------------------------------------
-# Setup Wizard — first-launch only
-# ---------------------------------------------------------------------------
-class SetupWizard(QDialog):
+class SetupWizard(CenteredDialog):
     def __init__(self, parent, initial_folder: str = "",
                  initial_faction: str | None = None,
                  initial_rank: str | None = None,
@@ -1099,7 +1107,6 @@ class SetupWizard(QDialog):
         self._rebuild_summary()
         self._update_nav()
 
-    # ---------- UI construction ----------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 20)
@@ -1109,15 +1116,13 @@ class SetupWizard(QDialog):
         self.title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
         root.addWidget(self.title_label)
 
-        self.subtitle_label = QLabel(
-            "Let's get you set up in a few quick steps."
-        )
-        self.subtitle_label.setStyleSheet("color: #6b7c93; font-size: 13px;")
+        self.subtitle_label = QLabel("Let's get you set up in a few quick steps.")
+        self.subtitle_label.setObjectName("hintLabel")
         root.addWidget(self.subtitle_label)
 
         self.progress_label = QLabel("")
         self.progress_label.setAlignment(Qt.AlignCenter)
-        self.progress_label.setStyleSheet("color: #95a5a6; font-size: 12px;")
+        self.progress_label.setObjectName("hintLabel")
         root.addWidget(self.progress_label)
 
         self.stack = QStackedWidget()
@@ -1162,7 +1167,7 @@ class SetupWizard(QDialog):
             "contains the 'screenshots' directory."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         v.addWidget(hint)
 
         row = QHBoxLayout()
@@ -1200,7 +1205,7 @@ class SetupWizard(QDialog):
             "Pick your faction. Prices and category folders depend on this."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         v.addWidget(hint)
 
         scroll = QScrollArea()
@@ -1238,8 +1243,7 @@ class SetupWizard(QDialog):
         self.wizard_rank_notice = QLabel("")
         self.wizard_rank_notice.setWordWrap(True)
         self.wizard_rank_notice.setStyleSheet(
-            "color: #6b7c93; background: rgba(0,0,0,0.04); "
-            "padding: 10px; border-radius: 6px;"
+            "background: rgba(0,0,0,0.04); padding: 10px; border-radius: 6px;"
         )
         v.addWidget(self.wizard_rank_notice)
 
@@ -1264,11 +1268,9 @@ class SetupWizard(QDialog):
         t.setStyleSheet("font-size: 16px; font-weight: bold;")
         v.addWidget(t)
 
-        hint = QLabel(
-            "Your in-game name and app theme. Both can be changed later."
-        )
+        hint = QLabel("Your in-game name and app theme. Both can be changed later.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         v.addWidget(hint)
 
         name_lbl = QLabel("In-game Name (optional)")
@@ -1310,14 +1312,13 @@ class SetupWizard(QDialog):
         v.addWidget(t)
 
         hint = QLabel("Here's a summary of your setup:")
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         v.addWidget(hint)
 
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
         self.summary_label.setStyleSheet(
-            "background: rgba(0,0,0,0.04); padding: 18px; "
-            "border-radius: 8px;"
+            "background: rgba(0,0,0,0.04); padding: 18px; border-radius: 8px;"
         )
         v.addWidget(self.summary_label)
 
@@ -1325,13 +1326,12 @@ class SetupWizard(QDialog):
             "You can change any of these settings later from the Settings menu."
         )
         done_hint.setWordWrap(True)
-        done_hint.setStyleSheet("color: #6b7c93; font-size: 12px; margin-top: 6px;")
+        done_hint.setObjectName("hintLabel")
         v.addWidget(done_hint)
 
         v.addStretch()
         return page
 
-    # ---------- helpers ----------
     def _get_selected_faction(self) -> str:
         for name, rb in self.wizard_faction_radios.items():
             if rb.isChecked():
@@ -1423,19 +1423,13 @@ class SetupWizard(QDialog):
             pos = 0
 
         self.btn_back.setEnabled(pos > 0)
-
-        if idx == 4:
-            self.btn_next.setText("Finish  ✓")
-        else:
-            self.btn_next.setText("Next  →")
+        self.btn_next.setText("Finish  ✓" if idx == 4 else "Next  →")
 
         if idx == 4:
             self.progress_label.setText("Ready to finish")
         else:
-            total_steps = len(active) - 1
-            self.progress_label.setText(f"Step {pos + 1} of {total_steps}")
+            self.progress_label.setText(f"Step {pos + 1} of {len(active) - 1}")
 
-    # ---------- navigation ----------
     def _go_next(self) -> None:
         idx = self.stack.currentIndex()
 
@@ -1479,7 +1473,6 @@ class SetupWizard(QDialog):
             self.stack.setCurrentIndex(active[pos - 1])
             self._update_nav()
 
-    # ---------- validation ----------
     def _validate_folder(self) -> bool:
         path = self.wizard_folder_edit.text().strip()
         if not path:
@@ -1530,31 +1523,22 @@ class SetupWizard(QDialog):
 
     def _validate_all(self) -> bool:
         if not self._validate_folder():
-            self.stack.setCurrentIndex(0)
-            self._update_nav()
-            return False
+            self.stack.setCurrentIndex(0); self._update_nav(); return False
         if not self._validate_faction():
-            self.stack.setCurrentIndex(1)
-            self._update_nav()
-            return False
+            self.stack.setCurrentIndex(1); self._update_nav(); return False
         if not self._validate_rank():
             active = self._get_active_pages()
             if 2 in active:
-                self.stack.setCurrentIndex(2)
-                self._update_nav()
+                self.stack.setCurrentIndex(2); self._update_nav()
             return False
         if not self._validate_profile():
-            self.stack.setCurrentIndex(3)
-            self._update_nav()
-            return False
+            self.stack.setCurrentIndex(3); self._update_nav(); return False
         return True
 
-    # ---------- signals ----------
     def _on_folder_changed(self, text: str) -> None:
         self.folder_value = text.strip()
 
     def _on_faction_changed(self) -> None:
-        # Not called when no page access, but keeps state clean
         self.faction_value = self._get_selected_faction()
 
     def _on_theme_changed(self, theme: str) -> None:
@@ -1571,9 +1555,9 @@ class SetupWizard(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Preview dialog — before creating the report
+# Preview dialog
 # ---------------------------------------------------------------------------
-class PreviewDialog(QDialog):
+class PreviewDialog(CenteredDialog):
     def __init__(self, parent, faction_display: str, game_name: str,
                  total_files: int, total_png_bytes: int,
                  estimated_bytes: int, max_kb: int,
@@ -1601,14 +1585,11 @@ class PreviewDialog(QDialog):
         title.setStyleSheet("font-size: 17px; font-weight: bold;")
         root.addWidget(title)
 
-        hint = QLabel(
-            "Make sure everything looks right. Click Create to start."
-        )
+        hint = QLabel("Make sure everything looks right. Click Create to start.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
-        # Details card
         card = QFrame()
         card.setObjectName("card")
         v = QVBoxLayout(card)
@@ -1636,7 +1617,6 @@ class PreviewDialog(QDialog):
         row("Estimated output", format_size(self.estimated_bytes),
             value_color="#27ae60")
 
-        # Free space — color coded
         if self.free_bytes > 0:
             free_color = "#27ae60"
             if self.estimated_bytes > self.free_bytes * 0.9:
@@ -1647,10 +1627,8 @@ class PreviewDialog(QDialog):
                 value_color=free_color)
 
         row("Target folder", str(self.target_path))
-
         root.addWidget(card)
 
-        # Bottom buttons
         btns = QHBoxLayout()
         btns.addStretch()
 
@@ -1674,7 +1652,7 @@ class PreviewDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Folder picker dialog
 # ---------------------------------------------------------------------------
-class FolderPickerDialog(QDialog):
+class FolderPickerDialog(CenteredDialog):
     def __init__(self, parent=None, initial: str = ""):
         super().__init__(parent)
         self.selected_path: str | None = None
@@ -1694,11 +1672,10 @@ class FolderPickerDialog(QDialog):
 
         hint = QLabel(
             "Select the installation folder of MTA:SA — the one that contains "
-            "the 'screenshots' directory. This path will be stored in the "
-            "Windows registry for future runs."
+            "the 'screenshots' directory."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         row = QHBoxLayout()
@@ -1750,7 +1727,7 @@ class FolderPickerDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Faction picker dialog
 # ---------------------------------------------------------------------------
-class FactionDialog(QDialog):
+class FactionDialog(CenteredDialog):
     def __init__(self, parent=None, initial: str | None = None):
         super().__init__(parent)
         self.faction_value: str | None = None
@@ -1773,7 +1750,7 @@ class FactionDialog(QDialog):
             "You can change this later in Settings."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         self.group = QButtonGroup(self)
@@ -1782,10 +1759,7 @@ class FactionDialog(QDialog):
         for name in ALL_FACTION_NAMES:
             rb = QRadioButton(name)
             rb.setMinimumHeight(36)
-            rb.setStyleSheet(
-                "QRadioButton { padding: 8px 12px; font-size: 14px; }"
-                "QRadioButton::indicator { width: 16px; height: 16px; }"
-            )
+            rb.setStyleSheet("QRadioButton { padding: 8px 12px; font-size: 14px; }")
             if initial == name:
                 rb.setChecked(True)
             elif initial is None and name == DEFAULT_FACTION:
@@ -1820,7 +1794,7 @@ class FactionDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Rank picker dialog
 # ---------------------------------------------------------------------------
-class RankDialog(QDialog):
+class RankDialog(CenteredDialog):
     def __init__(self, parent=None, faction: str = "Medic",
                  initial: str | None = None):
         super().__init__(parent)
@@ -1845,7 +1819,7 @@ class RankDialog(QDialog):
             "Prices depend on your rank. You can change this later in Settings."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         self.group = QButtonGroup(self)
@@ -1857,10 +1831,7 @@ class RankDialog(QDialog):
             label = f"{rank_name}   —   {price_str}"
             rb = QRadioButton(label)
             rb.setMinimumHeight(38)
-            rb.setStyleSheet(
-                "QRadioButton { padding: 8px 12px; font-size: 13px; }"
-                "QRadioButton::indicator { width: 16px; height: 16px; }"
-            )
+            rb.setStyleSheet("QRadioButton { padding: 8px 12px; font-size: 13px; }")
             if initial == rank_name:
                 rb.setChecked(True)
             elif initial is None and rank_name == first_rank:
@@ -1895,7 +1866,7 @@ class RankDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Game-name dialog
 # ---------------------------------------------------------------------------
-class GameNameDialog(QDialog):
+class GameNameDialog(CenteredDialog):
     def __init__(self, parent=None, initial: str = ""):
         super().__init__(parent)
         self.name_value: str | None = None
@@ -1920,7 +1891,7 @@ class GameNameDialog(QDialog):
             "it. The name is saved in the registry."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         self.name_edit = QLineEdit(initial)
@@ -1960,9 +1931,9 @@ class GameNameDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Progress dialog
+# Progress dialog (with ETA)
 # ---------------------------------------------------------------------------
-class ProgressDialog(QDialog):
+class ProgressDialog(CenteredDialog):
     def __init__(self, parent, total: int):
         super().__init__(parent)
         self.setWindowTitle("Creating Work Report")
@@ -1970,9 +1941,12 @@ class ProgressDialog(QDialog):
         self.setMinimumWidth(460)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
 
+        self._start_time = time.monotonic()
+        self._total = max(total, 1)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 22, 22, 22)
-        root.setSpacing(14)
+        root.setSpacing(12)
 
         title = QLabel("Compressing screenshots...")
         title.setStyleSheet("font-size: 15px; font-weight: bold;")
@@ -1983,11 +1957,11 @@ class ProgressDialog(QDialog):
             "into a zip file."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setRange(0, self._total)
         self.progress_bar.setValue(0)
         self.progress_bar.setMinimumHeight(22)
         root.addWidget(self.progress_bar)
@@ -1997,16 +1971,37 @@ class ProgressDialog(QDialog):
         self.label.setStyleSheet("font-weight: 600;")
         root.addWidget(self.label)
 
+        self.eta_label = QLabel("⏱  Estimating...")
+        self.eta_label.setAlignment(Qt.AlignCenter)
+        self.eta_label.setObjectName("hintLabel")
+        root.addWidget(self.eta_label)
+
     def update_progress(self, done: int, total: int) -> None:
         self.progress_bar.setRange(0, max(total, 1))
         self.progress_bar.setValue(done)
         self.label.setText(f"{done} / {total} files")
 
+        if done <= 0 or total <= 0:
+            self.eta_label.setText("⏱  Estimating...")
+            return
+
+        elapsed = time.monotonic() - self._start_time
+        if done >= total:
+            self.eta_label.setText(f"✅  Finished in {format_eta(elapsed).lstrip('~')}")
+            return
+
+        per_file = elapsed / done
+        remaining = per_file * (total - done)
+        if remaining < 0.5:
+            self.eta_label.setText("⏱  Almost done...")
+        else:
+            self.eta_label.setText(f"⏱  {format_eta(remaining)} remaining")
+
 
 # ---------------------------------------------------------------------------
 # Screenshot preview dialog
 # ---------------------------------------------------------------------------
-class ScreenshotPreviewDialog(QDialog):
+class ScreenshotPreviewDialog(CenteredDialog):
     THUMB_W = 200
     THUMB_H = 140
 
@@ -2027,7 +2022,7 @@ class ScreenshotPreviewDialog(QDialog):
         root.addWidget(header)
 
         hint = QLabel("Double-click a thumbnail to open it in your default viewer.")
-        hint.setStyleSheet("color: #6b7c93;")
+        hint.setObjectName("hintLabel")
         root.addWidget(hint)
 
         scroll = QScrollArea()
@@ -2042,8 +2037,7 @@ class ScreenshotPreviewDialog(QDialog):
 
         cols = 3
         for i, png in enumerate(png_files):
-            thumb = self._make_thumbnail(png)
-            grid.addWidget(thumb, i // cols, i % cols)
+            grid.addWidget(self._make_thumbnail(png), i // cols, i % cols)
 
         grid.setRowStretch(grid.rowCount(), 1)
         scroll.setWidget(container)
@@ -2074,12 +2068,10 @@ class ScreenshotPreviewDialog(QDialog):
 
         pix = QPixmap(str(png_path))
         if not pix.isNull():
-            scaled = pix.scaled(
+            img_label.setPixmap(pix.scaled(
                 QSize(self.THUMB_W, self.THUMB_H),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            img_label.setPixmap(scaled)
+                Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            ))
         else:
             img_label.setText("(cannot load)")
 
@@ -2087,8 +2079,8 @@ class ScreenshotPreviewDialog(QDialog):
 
         name_label = QLabel(png_path.name)
         name_label.setAlignment(Qt.AlignCenter)
-        name_label.setWordWrap(False)
-        name_label.setStyleSheet("font-size: 11px; color: #6b7c93;")
+        name_label.setObjectName("hintLabel")
+        name_label.setStyleSheet("font-size: 11px;")
         name_label.setFixedHeight(18)
         v.addWidget(name_label)
 
@@ -2127,10 +2119,11 @@ class MainWindow(QMainWindow):
         self._convert_dialog: ProgressDialog | None = None
         self._update_checker: UpdateChecker | None = None
         self._last_results: list | None = None
+        self._initial_centering_done = False
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(1000, 880)
-        self.resize(1080, 920)
+        self.setMinimumSize(1020, 900)
+        self.resize(1100, 940)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -2138,17 +2131,41 @@ class MainWindow(QMainWindow):
         self.home_page = self._create_home_page()
         self.tools_page = self._create_tools_page()
         self.report_page = self._create_report_page()
+        self.stats_page = self._create_stats_page()
         self.settings_page = self._create_settings_page()
 
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.tools_page)
         self.stack.addWidget(self.report_page)
+        self.stack.addWidget(self.stats_page)
         self.stack.addWidget(self.settings_page)
 
         self._build_menu()
         self._apply_style()
         self._refresh_labels()
         self._update_theme_button_text()
+
+    # ---------------- Window centering ----------------
+    def showEvent(self, event):
+        """Center the main window on screen the first time it's shown."""
+        super().showEvent(event)
+        if not self._initial_centering_done:
+            self._initial_centering_done = True
+            QTimer.singleShot(0, self._center_on_screen)
+
+    def _center_on_screen(self) -> None:
+        # Prefer the screen under the mouse, fall back to primary
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        # Shrink if the window is larger than the screen
+        w = min(self.width(), geo.width() - 40)
+        h = min(self.height(), geo.height() - 40)
+        self.resize(w, h)
+        rect = self.frameGeometry()
+        rect.moveCenter(geo.center())
+        self.move(rect.topLeft())
 
     # ---------------- Menu ----------------
     def _build_menu(self) -> None:
@@ -2166,6 +2183,12 @@ class MainWindow(QMainWindow):
         act_missing = QAction("Create Missing Category Folders", self)
         act_missing.triggered.connect(self.create_category_folders)
         tools_menu.addAction(act_missing)
+
+        tools_menu.addSeparator()
+
+        act_stats = QAction("📊 Faction Stats Dashboard", self)
+        act_stats.triggered.connect(self.open_stats)
+        tools_menu.addAction(act_stats)
 
         tools_menu.addSeparator()
 
@@ -2229,7 +2252,8 @@ class MainWindow(QMainWindow):
 
         subtitle = QLabel(f"Version {APP_VERSION}   •   Made By {APP_AUTHOR}")
         subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #95a5a6; font-size: 13px;")
+        subtitle.setObjectName("hintLabel")
+        subtitle.setStyleSheet("font-size: 13px;")
         layout.addWidget(subtitle)
 
         layout.addSpacing(16)
@@ -2264,19 +2288,25 @@ class MainWindow(QMainWindow):
         layout.addSpacing(16)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(20)
+        btn_row.setSpacing(16)
 
-        tools_btn = QPushButton("Tools")
+        tools_btn = QPushButton("🛠  Tools")
         tools_btn.setMinimumHeight(90)
-        tools_btn.setStyleSheet("font-size: 17px; font-weight: bold;")
+        tools_btn.setStyleSheet("font-size: 16px; font-weight: bold;")
         tools_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.tools_page))
 
-        settings_btn = QPushButton("Settings")
+        stats_btn = QPushButton("📊  Stats")
+        stats_btn.setMinimumHeight(90)
+        stats_btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+        stats_btn.clicked.connect(self.open_stats)
+
+        settings_btn = QPushButton("⚙  Settings")
         settings_btn.setMinimumHeight(90)
-        settings_btn.setStyleSheet("font-size: 17px; font-weight: bold;")
+        settings_btn.setStyleSheet("font-size: 16px; font-weight: bold;")
         settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
 
         btn_row.addWidget(tools_btn)
+        btn_row.addWidget(stats_btn)
         btn_row.addWidget(settings_btn)
         layout.addLayout(btn_row)
 
@@ -2313,7 +2343,7 @@ class MainWindow(QMainWindow):
         t1.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.calc_desc = QLabel()
         self.calc_desc.setWordWrap(True)
-        self.calc_desc.setStyleSheet("color: #6b7c93;")
+        self.calc_desc.setObjectName("hintLabel")
         info1.addWidget(t1)
         info1.addWidget(self.calc_desc)
         c1.addLayout(info1, 1)
@@ -2341,7 +2371,7 @@ class MainWindow(QMainWindow):
             "details before starting."
         )
         d2.setWordWrap(True)
-        d2.setStyleSheet("color: #6b7c93;")
+        d2.setObjectName("hintLabel")
         info2.addWidget(t2)
         info2.addWidget(d2)
         c2.addLayout(info2, 1)
@@ -2352,7 +2382,7 @@ class MainWindow(QMainWindow):
         c2.addWidget(create_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card2)
 
-        # Card 3 — Create missing folders
+        # Card 3 — Missing folders
         card3 = QFrame()
         card3.setObjectName("card")
         c3 = QHBoxLayout(card3)
@@ -2367,7 +2397,7 @@ class MainWindow(QMainWindow):
             "current faction inside the screenshots directory."
         )
         d3.setWordWrap(True)
-        d3.setStyleSheet("color: #6b7c93;")
+        d3.setObjectName("hintLabel")
         info3.addWidget(t3)
         info3.addWidget(d3)
         c3.addLayout(info3, 1)
@@ -2378,7 +2408,7 @@ class MainWindow(QMainWindow):
         c3.addWidget(folders_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card3)
 
-        # Card 4 — Clear (DANGER)
+        # Card 4 — Clear (danger)
         card4 = QFrame()
         card4.setObjectName("card")
         c4 = QHBoxLayout(card4)
@@ -2393,7 +2423,7 @@ class MainWindow(QMainWindow):
             "Folder structure is preserved. This action cannot be undone."
         )
         d4.setWordWrap(True)
-        d4.setStyleSheet("color: #6b7c93;")
+        d4.setObjectName("hintLabel")
         info4.addWidget(t4)
         info4.addWidget(d4)
         c4.addLayout(info4, 1)
@@ -2444,12 +2474,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
 
         self.report_info = QLabel()
-        self.report_info.setStyleSheet("color: #6b7c93;")
+        self.report_info.setObjectName("hintLabel")
         self.report_info.setWordWrap(True)
         layout.addWidget(self.report_info)
 
         preview_hint = QLabel("💡 Double-click a row to preview its screenshots.")
-        preview_hint.setStyleSheet("color: #6b7c93; font-size: 12px;")
+        preview_hint.setObjectName("hintLabel")
+        preview_hint.setStyleSheet("font-size: 12px;")
         layout.addWidget(preview_hint)
 
         self.table = QTableWidget(0, 4)
@@ -2468,14 +2499,97 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.table, 1)
 
         self.summary_label = QLabel()
+        self.summary_label.setObjectName("summaryLabel")
         self.summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.summary_label.setStyleSheet(
-            "font-size: 15px; font-weight: bold;"
-            "background: #eaf4fc; padding: 12px 16px; border-radius: 8px;"
-        )
         layout.addWidget(self.summary_label)
 
         return page
+
+    def _create_stats_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(30, 24, 30, 30)
+        layout.setSpacing(14)
+
+        header = QHBoxLayout()
+        back = QPushButton("←  Back")
+        back.setObjectName("backButton")
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.home_page))
+        header.addWidget(back)
+        header.addStretch()
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setMinimumHeight(32)
+        refresh_btn.clicked.connect(self.refresh_stats)
+        header.addWidget(refresh_btn)
+        layout.addLayout(header)
+
+        title = QLabel("📊  Faction Stats Dashboard")
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self.stats_info = QLabel()
+        self.stats_info.setObjectName("hintLabel")
+        self.stats_info.setWordWrap(True)
+        layout.addWidget(self.stats_info)
+
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(12)
+
+        self.stat_files_card, self.stat_files_value = self._make_stat_card(
+            "📸  Total Screenshots", "0"
+        )
+        self.stat_amount_card, self.stat_amount_value = self._make_stat_card(
+            "💰  Total Amount", "$0"
+        )
+        self.stat_active_card, self.stat_active_value = self._make_stat_card(
+            "📁  Active Categories", "0"
+        )
+        self.stat_top_card, self.stat_top_value = self._make_stat_card(
+            "🏆  Top Category", "—"
+        )
+
+        cards_row.addWidget(self.stat_files_card)
+        cards_row.addWidget(self.stat_amount_card)
+        cards_row.addWidget(self.stat_active_card)
+        cards_row.addWidget(self.stat_top_card)
+        layout.addLayout(cards_row)
+
+        breakdown_title = QLabel("Category Breakdown")
+        breakdown_title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 6px;")
+        layout.addWidget(breakdown_title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.breakdown_container = QWidget()
+        self.breakdown_layout = QVBoxLayout(self.breakdown_container)
+        self.breakdown_layout.setContentsMargins(0, 0, 0, 0)
+        self.breakdown_layout.setSpacing(8)
+        scroll.setWidget(self.breakdown_container)
+        layout.addWidget(scroll, 1)
+
+        return page
+
+    def _make_stat_card(self, title: str, initial_value: str):
+        card = QFrame()
+        card.setObjectName("card")
+        card.setMinimumHeight(110)
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(6)
+
+        t = QLabel(title)
+        t.setObjectName("hintLabel")
+        t.setStyleSheet("font-size: 12px; font-weight: 600;")
+        v.addWidget(t)
+
+        val = QLabel(initial_value)
+        val.setStyleSheet("font-size: 22px; font-weight: bold;")
+        val.setWordWrap(True)
+        v.addWidget(val)
+
+        return card, val
 
     def _create_settings_page(self) -> QWidget:
         page = QWidget()
@@ -2495,7 +2609,6 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
-        # Scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
@@ -2546,7 +2659,6 @@ class MainWindow(QMainWindow):
         )
         v.addWidget(self.settings_name_card)
 
-        # Compression card
         comp_card = QFrame()
         comp_card.setObjectName("card")
         ccv = QVBoxLayout(comp_card)
@@ -2562,7 +2674,8 @@ class MainWindow(QMainWindow):
             "space but reduce image quality."
         )
         comp_hint.setWordWrap(True)
-        comp_hint.setStyleSheet("color: #6b7c93; font-size: 12px;")
+        comp_hint.setObjectName("hintLabel")
+        comp_hint.setStyleSheet("font-size: 12px;")
         ccv.addWidget(comp_hint)
 
         self.compression_group = QButtonGroup(self)
@@ -2583,7 +2696,6 @@ class MainWindow(QMainWindow):
 
         v.addWidget(comp_card)
 
-        # Theme card
         self.settings_theme_card, self.settings_theme_label, self.settings_theme_btn = make_setting_card(
             "Appearance", "Switch Theme", self.toggle_theme
         )
@@ -2729,8 +2841,125 @@ class MainWindow(QMainWindow):
             )
             return
 
-        dlg = ScreenshotPreviewDialog(self, display_name, pngs)
-        dlg.exec()
+        ScreenshotPreviewDialog(self, display_name, pngs).exec()
+
+    # ---------------- Stats Dashboard ----------------
+    def open_stats(self) -> None:
+        self.stack.setCurrentWidget(self.stats_page)
+        self.refresh_stats()
+
+    def refresh_stats(self) -> None:
+        while self.breakdown_layout.count():
+            item = self.breakdown_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if is_coming_soon(self.faction):
+            self.stats_info.setText(
+                f"Faction: {self.faction} — Prices not yet announced."
+            )
+            self.stat_files_value.setText("—")
+            self.stat_amount_value.setText("—")
+            self.stat_active_value.setText("—")
+            self.stat_top_value.setText("—")
+            empty = QLabel("Stats are not available for coming-soon factions.")
+            empty.setObjectName("hintLabel")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("padding: 30px;")
+            self.breakdown_layout.addWidget(empty)
+            self.breakdown_layout.addStretch()
+            return
+
+        results, error = calculate_report(self.mta_folder, self.faction, self.rank)
+        if error:
+            self.stats_info.setText(error)
+            self.stat_files_value.setText("—")
+            self.stat_amount_value.setText("—")
+            self.stat_active_value.setText("—")
+            self.stat_top_value.setText("—")
+            empty = QLabel("Could not read screenshots folder.")
+            empty.setObjectName("hintLabel")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("padding: 30px;")
+            self.breakdown_layout.addWidget(empty)
+            self.breakdown_layout.addStretch()
+            return
+
+        total_files = sum(r[1] for r in results)
+        total_amount = sum(r[3] for r in results)
+        active = [r for r in results if r[1] > 0]
+        top_name = "—"
+        if active:
+            top = max(active, key=lambda r: r[1])
+            top_name = top[0]
+
+        self.stat_files_value.setText(f"{total_files:,}")
+        self.stat_amount_value.setText(f"${total_amount:,}")
+        self.stat_active_value.setText(str(len(active)))
+        self.stat_top_value.setText(top_name)
+
+        self.stats_info.setText(
+            f"Faction: {self._faction_display()}      |      "
+            f"Screenshots directory:  {Path(self.mta_folder) / 'screenshots'}"
+        )
+
+        max_count = max((r[1] for r in results), default=0)
+        if max_count == 0:
+            empty = QLabel("No screenshots found for this faction.")
+            empty.setObjectName("hintLabel")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("padding: 30px;")
+            self.breakdown_layout.addWidget(empty)
+            self.breakdown_layout.addStretch()
+            return
+
+        for i, (name, count, price, subtotal) in enumerate(results):
+            color = STAT_BAR_PALETTE[i % len(STAT_BAR_PALETTE)]
+            row = QFrame()
+            row.setObjectName("card")
+            h = QHBoxLayout(row)
+            h.setContentsMargins(14, 10, 14, 10)
+            h.setSpacing(12)
+
+            name_lbl = QLabel(name)
+            name_lbl.setMinimumWidth(110)
+            name_lbl.setStyleSheet("font-weight: bold;")
+            h.addWidget(name_lbl)
+
+            bar = QProgressBar()
+            bar.setRange(0, max_count)
+            bar.setValue(count)
+            bar.setTextVisible(False)
+            bar.setMinimumHeight(20)
+            bar.setStyleSheet(f"""
+                QProgressBar {{
+                    background: rgba(128,128,128,0.18);
+                    border: none;
+                    border-radius: 10px;
+                }}
+                QProgressBar::chunk {{
+                    background: {color};
+                    border-radius: 10px;
+                }}
+            """)
+            h.addWidget(bar, 1)
+
+            count_lbl = QLabel(f"{count:,}")
+            count_lbl.setMinimumWidth(60)
+            count_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            count_lbl.setStyleSheet("font-weight: 600;")
+            h.addWidget(count_lbl)
+
+            amount_lbl = QLabel(f"${subtotal:,}")
+            amount_lbl.setMinimumWidth(110)
+            amount_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            amount_lbl.setStyleSheet("font-weight: 600;")
+            h.addWidget(amount_lbl)
+
+            self.breakdown_layout.addWidget(row)
+
+        self.breakdown_layout.addStretch()
 
     # ---------------- Export ----------------
     def _ensure_report(self) -> bool:
@@ -2876,6 +3105,7 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._refresh_labels()
         self._update_theme_button_text()
+        self.refresh_stats()
 
     def _apply_style(self) -> None:
         self.setStyleSheet(QSS_DARK if self.theme == "dark" else QSS_LIGHT)
@@ -2890,7 +3120,6 @@ class MainWindow(QMainWindow):
 
     # ---------------- Create Missing Folders ----------------
     def create_category_folders(self) -> None:
-        # Confirm
         specs = get_faction_folder_specs(self.faction)
         if not specs:
             QMessageBox.warning(
@@ -2921,12 +3150,9 @@ class MainWindow(QMainWindow):
         created, skipped, error = create_faction_folders(self.mta_folder, self.faction)
 
         if error and created == 0:
-            QMessageBox.warning(
-                self, "Create Folders Failed",
-                f"Could not create folders:\n{error}"
-            )
+            QMessageBox.warning(self, "Create Folders Failed",
+                                f"Could not create folders:\n{error}")
             return
-
         if error:
             QMessageBox.warning(
                 self, "Partially Completed",
@@ -2934,12 +3160,9 @@ class MainWindow(QMainWindow):
                 f"Some errors occurred:\n\n{error}"
             )
             return
-
         QMessageBox.information(
             self, "Folders Ready",
-            f"Done!\n\n"
-            f"Created: {created}\n"
-            f"Already existed: {skipped}"
+            f"Done!\n\nCreated: {created}\nAlready existed: {skipped}"
         )
 
     # ---------------- Folder / Faction / Rank / Name ----------------
@@ -2990,11 +3213,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Estimate sizes
         total_png_bytes = estimate_png_size(self.mta_folder, self.faction, self.rank)
         estimated_bytes = estimate_output_size(total_png_bytes, total_files, self.compression_kb)
 
-        # Get desktop path + free space
         desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
         if not desktop_path:
             QMessageBox.warning(self, "Error", "Could not determine Desktop location.")
@@ -3009,7 +3230,6 @@ class MainWindow(QMainWindow):
         except OSError:
             free_bytes = 0
 
-        # Disk space check
         if free_bytes > 0 and estimated_bytes > free_bytes * 0.9:
             QMessageBox.warning(
                 self, "Not Enough Disk Space",
@@ -3020,7 +3240,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Show preview dialog
         preview = PreviewDialog(
             self,
             faction_display=self._faction_display(),
@@ -3035,7 +3254,6 @@ class MainWindow(QMainWindow):
         if preview.exec() != QDialog.Accepted:
             return
 
-        # Start worker
         self._convert_dialog = ProgressDialog(self, total_files)
         worker = ConvertWorker(
             self.mta_folder, name, self.faction, self.rank,
@@ -3223,10 +3441,11 @@ class MainWindow(QMainWindow):
             "• Stores the MTA:SA folder, faction, rank, and game name in the "
             "Windows registry.<br>"
             "• Calculates a work report using faction- and rank-specific prices.<br>"
-            "• Converts PNG screenshots to JPG with adjustable compression "
-            "(250 / 200 / 150 KB).<br>"
+            "• Converts PNG screenshots to JPG with adjustable compression.<br>"
             "• Creates a zipped work report on the Desktop with a preview "
             "and disk-space check before starting.<br>"
+            "• Faction Stats Dashboard with visual category breakdown.<br>"
+            "• Progress dialog with live ETA.<br>"
             "• Exports reports to CSV or PDF.<br>"
             "• Previews screenshots by double-clicking a category row.<br>"
             "• Supports both Light and Dark themes.<br>"
@@ -3253,7 +3472,6 @@ def main() -> int:
     theme = get_saved_theme()
     compression_kb = get_saved_compression()
 
-    # First launch → Wizard
     is_first_launch = (not folder or not Path(folder).is_dir()) and not faction
 
     if is_first_launch:
@@ -3288,7 +3506,6 @@ def main() -> int:
             )
             return 1
     else:
-        # Normal launch — validate essentials
         if not folder or not Path(folder).is_dir():
             dlg = FolderPickerDialog(None, folder or "")
             if dlg.exec() != QDialog.Accepted or not dlg.selected_path:
