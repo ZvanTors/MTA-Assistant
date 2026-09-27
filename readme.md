@@ -19,6 +19,14 @@
 
 <hr>
 
+<h2>🎬 Video Tutorial</h2>
+
+<p>Watch a quick walkthrough of MTA Assistant in action — from setup to creating your first work report.</p>
+
+<div id="14883099495"><script type="text/JavaScript" src="https://www.aparat.com/embed/dus4h5a?data[rnddiv]=14883099495&data[responsive]=yes"></script></div>
+
+<hr>
+
 <h2>✨ Features</h2>
 
 <h3>📊 Work Report Calculator</h3>
@@ -27,7 +35,7 @@
 <h3>📦 One-Click Work Report Creation</h3>
 <p>Converts every PNG screenshot to a compressed JPG (max <strong>250 KB</strong> each), packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar</strong> so the app never freezes.</p>
 
-<h3>📤 Export Reports to CSV & PDF</h3>
+<h3>📤 Export Reports to CSV &amp; PDF</h3>
 <p>Save your work report as a shareable file — no more screenshots of the table. Export directly to:</p>
 <ul>
   <li><strong>CSV</strong> — opens in Excel / Google Sheets with proper encoding</li>
@@ -58,7 +66,7 @@
 <p>Rank-based factions (Taxi, Hitman Agency, Medic, New Reporter) support <strong>5 ranks</strong>, each with its own price list. Pick your rank once — it's remembered forever.</p>
 
 <h3>🔤 Case-Insensitive Folder Matching</h3>
-<p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same.</p>
+<p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same. Same goes for <code>Slot-Gun</code>, <code>towcar</code>, and every other category.</p>
 
 <h3>💾 Registry Persistence</h3>
 <p>Your MTA:SA folder, faction, rank, in-game name, and theme are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
@@ -265,7 +273,7 @@
 
 <h3>v1.9.0</h3>
 <ul>
-  <li>📤 <strong>Export reports to CSV & PDF</strong> — directly from the Report page or Tools menu</li>
+  <li>📤 <strong>Export reports to CSV &amp; PDF</strong> — directly from the Report page or Tools menu</li>
   <li>🌙 <strong>Dark Mode</strong> — full theme with live toggle, saved in registry</li>
   <li>🖼️ <strong>Screenshot Preview</strong> — double-click a report row to open a gallery of its screenshots</li>
   <li>🎨 Refactored stylesheets into Light and Dark constants</li>
