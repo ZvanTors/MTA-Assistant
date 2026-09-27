@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.9.1  ( Made By AmooReza )
+MTA Assistant - v1.10.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -36,7 +36,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.10.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -50,8 +50,10 @@ REG_VALUE_FACTION = "Faction"
 REG_VALUE_RANK = "Rank"
 REG_VALUE_THEME = "Theme"
 REG_VALUE_SKIPPED_VERSION = "SkippedVersion"
+REG_VALUE_COMPRESSION = "CompressionLevel"   # in KB: 250 / 200 / 150
 
-MAX_IMAGE_BYTES = 250 * 1024  # 250 KB
+COMPRESSION_LEVELS = [250, 200, 150]
+DEFAULT_COMPRESSION = 250
 
 # --- Static factions ---
 FACTIONS = {
@@ -171,11 +173,23 @@ def faction_requires_rank(faction: str) -> bool:
     return faction in RANK_BASED_FACTIONS
 
 
+def get_faction_folder_specs(faction: str):
+    """Return list of (display_name, key) for a faction regardless of type."""
+    if faction in COMING_SOON_FACTIONS:
+        return list(COMING_SOON_FACTIONS[faction])
+    if faction in RANK_BASED_FACTIONS:
+        ranks = RANK_BASED_FACTIONS[faction]
+        first_rank_prices = next(iter(ranks.values()))
+        return [(n, k) for n, k, _ in first_rank_prices]
+    if faction in FACTIONS:
+        return [(n, k) for n, k, _ in FACTIONS[faction]]
+    return []
+
+
 # ---------------------------------------------------------------------------
-# Version helpers (for auto-update)
+# Version helpers
 # ---------------------------------------------------------------------------
 def parse_version(v: str) -> tuple:
-    """Parse a version string like 'v1.2.3' into a tuple (1, 2, 3)."""
     v = (v or "").strip().lstrip("vV")
     parts = []
     for chunk in v.split("."):
@@ -191,6 +205,16 @@ def parse_version(v: str) -> tuple:
 
 def is_newer_version(latest: str, current: str) -> bool:
     return parse_version(latest) > parse_version(current)
+
+
+def format_size(bytes_: int) -> str:
+    if bytes_ < 1024:
+        return f"{bytes_} B"
+    if bytes_ < 1024 * 1024:
+        return f"{bytes_ / 1024:.1f} KB"
+    if bytes_ < 1024 * 1024 * 1024:
+        return f"{bytes_ / (1024 * 1024):.1f} MB"
+    return f"{bytes_ / (1024 * 1024 * 1024):.2f} GB"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +307,23 @@ def save_skipped_version(version: str) -> None:
     _write_value(REG_VALUE_SKIPPED_VERSION, version)
 
 
+def get_saved_compression() -> int:
+    value = _read_value(REG_VALUE_COMPRESSION)
+    try:
+        n = int(value) if value else DEFAULT_COMPRESSION
+    except (ValueError, TypeError):
+        n = DEFAULT_COMPRESSION
+    if n not in COMPRESSION_LEVELS:
+        n = DEFAULT_COMPRESSION
+    return n
+
+
+def save_compression(kb: int) -> None:
+    if kb not in COMPRESSION_LEVELS:
+        kb = DEFAULT_COMPRESSION
+    _write_value(REG_VALUE_COMPRESSION, str(kb))
+
+
 # ---------------------------------------------------------------------------
 # Filesystem helpers
 # ---------------------------------------------------------------------------
@@ -315,7 +356,6 @@ def _collect_category_dirs(screenshots_dir: Path) -> dict[str, Path]:
 
 
 def _list_pngs_for_category(base_folder: str, key: str) -> list[Path]:
-    """Return all PNGs inside the first-level folder + nested same-named folder."""
     screenshots_dir = Path(base_folder) / "screenshots"
     if not screenshots_dir.is_dir():
         return []
@@ -346,10 +386,84 @@ def _list_pngs_for_category(base_folder: str, key: str) -> list[Path]:
     return result
 
 
+def estimate_png_size(base_folder: str, faction: str, rank: str | None = None) -> int:
+    """Total size (bytes) of all PNGs across the current faction's categories."""
+    screenshots_dir = Path(base_folder) / "screenshots"
+    if not screenshots_dir.is_dir():
+        return 0
+    try:
+        subdirs = _collect_category_dirs(screenshots_dir)
+    except OSError:
+        return 0
+    total = 0
+    for _, key, _ in get_prices(faction, rank):
+        cat = subdirs.get(key)
+        if cat is None:
+            continue
+        try:
+            for f in cat.iterdir():
+                if f.is_file() and f.suffix.lower() == ".png":
+                    try:
+                        total += f.stat().st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return total
+
+
+def estimate_output_size(total_png_bytes: int, file_count: int, max_kb: int) -> int:
+    """Conservative estimate of the final zip size."""
+    worst_case = file_count * max_kb * 1024
+    likely = min(total_png_bytes, worst_case) if total_png_bytes > 0 else worst_case
+    # Add ~5% overhead for zip archive
+    return int(likely * 1.05)
+
+
+def create_faction_folders(base_folder: str, faction: str):
+    """
+    Create missing category folders inside the screenshots directory.
+    Returns (created_count, skipped_count, error).
+    """
+    screenshots_dir = Path(base_folder) / "screenshots"
+    if not screenshots_dir.is_dir():
+        try:
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return 0, 0, f"Failed to create 'screenshots' folder:\n{exc}"
+
+    specs = get_faction_folder_specs(faction)
+    if not specs:
+        return 0, 0, f"Unknown faction: {faction}"
+
+    try:
+        existing = _collect_category_dirs(screenshots_dir)
+    except OSError as exc:
+        return 0, 0, f"Failed to read the screenshots folder:\n{exc}"
+
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for display_name, key in specs:
+        if key in existing:
+            skipped += 1
+            continue
+        try:
+            (screenshots_dir / display_name).mkdir(parents=True, exist_ok=True)
+            created += 1
+        except OSError as exc:
+            errors.append(f"{display_name}: {exc}")
+
+    if errors:
+        return created, skipped, "\n".join(errors)
+    return created, skipped, None
+
+
 # ---------------------------------------------------------------------------
 # Image processing
 # ---------------------------------------------------------------------------
-def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int = MAX_IMAGE_BYTES) -> None:
+def compress_to_jpg(src_png: Path, dst_jpg: Path, max_bytes: int) -> None:
     img = Image.open(src_png)
 
     if img.mode in ("RGBA", "LA"):
@@ -526,12 +640,14 @@ class ConvertWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, base_folder: str, game_name: str, faction: str,
-                 rank: str | None = None, parent=None):
+                 rank: str | None = None, max_kb: int = DEFAULT_COMPRESSION,
+                 parent=None):
         super().__init__(parent)
         self.base_folder = base_folder
         self.game_name = game_name
         self.faction = faction
         self.rank = rank
+        self.max_kb = max_kb
 
     def run(self) -> None:
         if not PIL_AVAILABLE:
@@ -586,6 +702,7 @@ class ConvertWorker(QThread):
             self.failed.emit(f"Failed to create the folder on the Desktop:\n{exc}")
             return
 
+        max_bytes = self.max_kb * 1024
         done = 0
         for display_name, key, _ in get_prices(self.faction, self.rank):
             dst_dir = target / display_name
@@ -608,7 +725,7 @@ class ConvertWorker(QThread):
             for png in pngs:
                 dst_jpg = dst_dir / (png.stem + ".jpg")
                 try:
-                    compress_to_jpg(png, dst_jpg)
+                    compress_to_jpg(png, dst_jpg, max_bytes=max_bytes)
                 except Exception as exc:
                     self.failed.emit(f"Failed to process '{png.name}':\n{exc}")
                     return
@@ -638,8 +755,7 @@ class ConvertWorker(QThread):
 # Update checker (background)
 # ---------------------------------------------------------------------------
 class UpdateChecker(QThread):
-    """Fetches the latest release info from GitHub in the background."""
-    update_available = Signal(str, str, str)   # latest_version, download_url, release_url
+    update_available = Signal(str, str, str)
     no_update = Signal()
     check_failed = Signal(str)
 
@@ -675,7 +791,6 @@ class UpdateChecker(QThread):
 
         release_url = data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases"
 
-        # Find the .exe asset (fallback to release page)
         download_url = ""
         for asset in data.get("assets", []) or []:
             name = (asset.get("name") or "").lower()
@@ -956,6 +1071,604 @@ QSS_DARK = """
     QScrollArea > QWidget > QWidget { background: #1a1a2e; }
     QLabel { color: #e8e8f0; }
 """
+
+
+# ---------------------------------------------------------------------------
+# Setup Wizard — first-launch only
+# ---------------------------------------------------------------------------
+class SetupWizard(QDialog):
+    def __init__(self, parent, initial_folder: str = "",
+                 initial_faction: str | None = None,
+                 initial_rank: str | None = None,
+                 initial_theme: str = "light"):
+        super().__init__(parent)
+        self.setWindowTitle("Welcome to MTA Assistant")
+        self.setModal(True)
+        self.resize(700, 560)
+
+        self.folder_value = initial_folder or ""
+        self.faction_value = initial_faction or DEFAULT_FACTION
+        self.rank_value = initial_rank or DEFAULT_RANK
+        self.game_name_value = ""
+        self.theme_value = initial_theme if initial_theme in ("light", "dark") else "light"
+
+        self.setStyleSheet(QSS_DARK if self.theme_value == "dark" else QSS_LIGHT)
+
+        self._build_ui()
+        self._rebuild_rank_radios()
+        self._rebuild_summary()
+        self._update_nav()
+
+    # ---------- UI construction ----------
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 20)
+        root.setSpacing(12)
+
+        self.title_label = QLabel("🎮 Welcome to MTA Assistant")
+        self.title_label.setStyleSheet("font-size: 22px; font-weight: bold;")
+        root.addWidget(self.title_label)
+
+        self.subtitle_label = QLabel(
+            "Let's get you set up in a few quick steps."
+        )
+        self.subtitle_label.setStyleSheet("color: #6b7c93; font-size: 13px;")
+        root.addWidget(self.subtitle_label)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setAlignment(Qt.AlignCenter)
+        self.progress_label.setStyleSheet("color: #95a5a6; font-size: 12px;")
+        root.addWidget(self.progress_label)
+
+        self.stack = QStackedWidget()
+        self.page_folder = self._build_folder_page()
+        self.page_faction = self._build_faction_page()
+        self.page_rank = self._build_rank_page()
+        self.page_profile = self._build_profile_page()
+        self.page_finish = self._build_finish_page()
+        self.stack.addWidget(self.page_folder)
+        self.stack.addWidget(self.page_faction)
+        self.stack.addWidget(self.page_rank)
+        self.stack.addWidget(self.page_profile)
+        self.stack.addWidget(self.page_finish)
+        root.addWidget(self.stack, 1)
+
+        nav = QHBoxLayout()
+        self.btn_back = QPushButton("←  Back")
+        self.btn_back.setObjectName("secondaryButton")
+        self.btn_back.setMinimumHeight(40)
+        self.btn_back.setMinimumWidth(130)
+        self.btn_back.clicked.connect(self._go_back)
+        nav.addWidget(self.btn_back)
+        nav.addStretch()
+        self.btn_next = QPushButton("Next  →")
+        self.btn_next.setMinimumHeight(40)
+        self.btn_next.setMinimumWidth(150)
+        self.btn_next.clicked.connect(self._go_next)
+        nav.addWidget(self.btn_next)
+        root.addLayout(nav)
+
+    def _build_folder_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(14)
+
+        t = QLabel("Step 1 — MTA:SA Folder")
+        t.setStyleSheet("font-size: 16px; font-weight: bold;")
+        v.addWidget(t)
+
+        hint = QLabel(
+            "Select the installation folder of MTA:SA — the one that "
+            "contains the 'screenshots' directory."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        v.addWidget(hint)
+
+        row = QHBoxLayout()
+        self.wizard_folder_edit = QLineEdit(self.folder_value)
+        self.wizard_folder_edit.setPlaceholderText(
+            r"C:\Program Files (x86)\MTA San Andreas 1.6"
+        )
+        self.wizard_folder_edit.setMinimumHeight(38)
+        self.wizard_folder_edit.textChanged.connect(self._on_folder_changed)
+        browse = QPushButton("Browse...")
+        browse.setMinimumHeight(38)
+        browse.clicked.connect(self._browse_wizard_folder)
+        row.addWidget(self.wizard_folder_edit, 1)
+        row.addWidget(browse)
+        v.addLayout(row)
+
+        self.folder_error = QLabel("")
+        self.folder_error.setStyleSheet("color: #c0392b; font-size: 12px;")
+        self.folder_error.setWordWrap(True)
+        v.addWidget(self.folder_error)
+
+        v.addStretch()
+        return page
+
+    def _build_faction_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(12)
+
+        t = QLabel("Step 2 — Your Faction")
+        t.setStyleSheet("font-size: 16px; font-weight: bold;")
+        v.addWidget(t)
+
+        hint = QLabel(
+            "Pick your faction. Prices and category folders depend on this."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        v.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        cv = QVBoxLayout(container)
+        cv.setSpacing(4)
+
+        self.wizard_faction_group = QButtonGroup(self)
+        self.wizard_faction_radios: dict[str, QRadioButton] = {}
+        for name in ALL_FACTION_NAMES:
+            rb = QRadioButton(name)
+            rb.setMinimumHeight(34)
+            rb.setChecked(name == self.faction_value)
+            rb.toggled.connect(
+                lambda checked: self._on_faction_changed() if checked else None
+            )
+            self.wizard_faction_group.addButton(rb)
+            self.wizard_faction_radios[name] = rb
+            cv.addWidget(rb)
+        cv.addStretch()
+        scroll.setWidget(container)
+        v.addWidget(scroll, 1)
+        return page
+
+    def _build_rank_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(12)
+
+        t = QLabel("Step 3 — Your Rank")
+        t.setStyleSheet("font-size: 16px; font-weight: bold;")
+        v.addWidget(t)
+
+        self.wizard_rank_notice = QLabel("")
+        self.wizard_rank_notice.setWordWrap(True)
+        self.wizard_rank_notice.setStyleSheet(
+            "color: #6b7c93; background: rgba(0,0,0,0.04); "
+            "padding: 10px; border-radius: 6px;"
+        )
+        v.addWidget(self.wizard_rank_notice)
+
+        self.rank_scroll = QScrollArea()
+        self.rank_scroll.setWidgetResizable(True)
+        self.rank_container = QWidget()
+        self.rank_container_layout = QVBoxLayout(self.rank_container)
+        self.rank_container_layout.setSpacing(4)
+        self.rank_scroll.setWidget(self.rank_container)
+        v.addWidget(self.rank_scroll, 1)
+
+        self.wizard_rank_group = QButtonGroup(self)
+        self.wizard_rank_radios: dict[str, QRadioButton] = {}
+        return page
+
+    def _build_profile_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(12)
+
+        t = QLabel("Step 4 — Your Profile")
+        t.setStyleSheet("font-size: 16px; font-weight: bold;")
+        v.addWidget(t)
+
+        hint = QLabel(
+            "Your in-game name and app theme. Both can be changed later."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        v.addWidget(hint)
+
+        name_lbl = QLabel("In-game Name (optional)")
+        name_lbl.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        v.addWidget(name_lbl)
+
+        self.wizard_name_edit = QLineEdit("")
+        self.wizard_name_edit.setPlaceholderText("(AmooReza)")
+        self.wizard_name_edit.setMinimumHeight(38)
+        v.addWidget(self.wizard_name_edit)
+
+        theme_lbl = QLabel("Theme")
+        theme_lbl.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        v.addWidget(theme_lbl)
+
+        self.wizard_theme_group = QButtonGroup(self)
+        self.wizard_theme_radios: dict[str, QRadioButton] = {}
+        for theme_name, label in (("light", "Light"), ("dark", "Dark")):
+            rb = QRadioButton(label)
+            rb.setMinimumHeight(34)
+            rb.setChecked(theme_name == self.theme_value)
+            rb.toggled.connect(
+                lambda checked, t=theme_name: self._on_theme_changed(t) if checked else None
+            )
+            self.wizard_theme_group.addButton(rb)
+            self.wizard_theme_radios[theme_name] = rb
+            v.addWidget(rb)
+
+        v.addStretch()
+        return page
+
+    def _build_finish_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(14)
+
+        t = QLabel("✅  All set!")
+        t.setStyleSheet("font-size: 20px; font-weight: bold;")
+        v.addWidget(t)
+
+        hint = QLabel("Here's a summary of your setup:")
+        hint.setStyleSheet("color: #6b7c93;")
+        v.addWidget(hint)
+
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setStyleSheet(
+            "background: rgba(0,0,0,0.04); padding: 18px; "
+            "border-radius: 8px;"
+        )
+        v.addWidget(self.summary_label)
+
+        done_hint = QLabel(
+            "You can change any of these settings later from the Settings menu."
+        )
+        done_hint.setWordWrap(True)
+        done_hint.setStyleSheet("color: #6b7c93; font-size: 12px; margin-top: 6px;")
+        v.addWidget(done_hint)
+
+        v.addStretch()
+        return page
+
+    # ---------- helpers ----------
+    def _get_selected_faction(self) -> str:
+        for name, rb in self.wizard_faction_radios.items():
+            if rb.isChecked():
+                return name
+        return self.faction_value
+
+    def _get_active_pages(self) -> list[int]:
+        pages = [0, 1]
+        if faction_requires_rank(self._get_selected_faction()):
+            pages.append(2)
+        pages.append(3)
+        pages.append(4)
+        return pages
+
+    def _rebuild_rank_radios(self) -> None:
+        for rb in list(self.wizard_rank_radios.values()):
+            try:
+                self.wizard_rank_group.removeButton(rb)
+            except Exception:
+                pass
+            rb.setParent(None)
+            rb.deleteLater()
+        self.wizard_rank_radios.clear()
+
+        while self.rank_container_layout.count():
+            item = self.rank_container_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        faction = self._get_selected_faction()
+        if not faction_requires_rank(faction):
+            self.wizard_rank_notice.setText(
+                f"'{faction}' does not use ranks. You can continue to the next step."
+            )
+            self.rank_scroll.setVisible(False)
+            return
+
+        self.rank_scroll.setVisible(True)
+        self.wizard_rank_notice.setText(
+            f"'{faction}' supports 5 ranks, each with its own price list."
+        )
+
+        ranks = RANK_BASED_FACTIONS.get(faction, {})
+        first_rank = next(iter(ranks.keys()), None)
+        any_checked = False
+
+        for rank_name, prices in ranks.items():
+            price_str = "  |  ".join(f"{n} ${p:,}" for n, _, p in prices)
+            label = f"{rank_name}   —   {price_str}"
+            rb = QRadioButton(label)
+            rb.setMinimumHeight(36)
+            if self.rank_value == rank_name:
+                rb.setChecked(True)
+                any_checked = True
+            elif rank_name == first_rank and not any_checked:
+                rb.setChecked(True)
+                self.rank_value = rank_name
+                any_checked = True
+            self.wizard_rank_group.addButton(rb)
+            self.wizard_rank_radios[rank_name] = rb
+            self.rank_container_layout.addWidget(rb)
+
+        self.rank_container_layout.addStretch()
+
+    def _rebuild_summary(self) -> None:
+        faction = self._get_selected_faction()
+        name = self.wizard_name_edit.text().strip() if hasattr(self, "wizard_name_edit") else ""
+        name_display = name if name else "(not set)"
+        theme = "Dark" if self.theme_value == "dark" else "Light"
+
+        lines = [
+            f"<b>MTA Folder:</b>&nbsp; {self.folder_value or '(not set)'}",
+            f"<b>Faction:</b>&nbsp; {faction}",
+        ]
+        if faction_requires_rank(faction):
+            lines.append(f"<b>Rank:</b>&nbsp; {self.rank_value}")
+        lines.append(f"<b>Game Name:</b>&nbsp; {name_display}")
+        lines.append(f"<b>Theme:</b>&nbsp; {theme}")
+
+        self.summary_label.setText("<br>".join(lines))
+
+    def _update_nav(self) -> None:
+        idx = self.stack.currentIndex()
+        active = self._get_active_pages()
+        try:
+            pos = active.index(idx)
+        except ValueError:
+            pos = 0
+
+        self.btn_back.setEnabled(pos > 0)
+
+        if idx == 4:
+            self.btn_next.setText("Finish  ✓")
+        else:
+            self.btn_next.setText("Next  →")
+
+        if idx == 4:
+            self.progress_label.setText("Ready to finish")
+        else:
+            total_steps = len(active) - 1
+            self.progress_label.setText(f"Step {pos + 1} of {total_steps}")
+
+    # ---------- navigation ----------
+    def _go_next(self) -> None:
+        idx = self.stack.currentIndex()
+
+        if idx == 0:
+            if not self._validate_folder():
+                return
+        elif idx == 1:
+            if not self._validate_faction():
+                return
+            self._rebuild_rank_radios()
+            self._rebuild_summary()
+        elif idx == 2:
+            if not self._validate_rank():
+                return
+        elif idx == 3:
+            if not self._validate_profile():
+                return
+            self._rebuild_summary()
+        elif idx == 4:
+            if self._validate_all():
+                self.accept()
+            return
+
+        active = self._get_active_pages()
+        try:
+            pos = active.index(idx)
+        except ValueError:
+            pos = 0
+        if pos + 1 < len(active):
+            self.stack.setCurrentIndex(active[pos + 1])
+            self._update_nav()
+
+    def _go_back(self) -> None:
+        idx = self.stack.currentIndex()
+        active = self._get_active_pages()
+        try:
+            pos = active.index(idx)
+        except ValueError:
+            pos = 0
+        if pos > 0:
+            self.stack.setCurrentIndex(active[pos - 1])
+            self._update_nav()
+
+    # ---------- validation ----------
+    def _validate_folder(self) -> bool:
+        path = self.wizard_folder_edit.text().strip()
+        if not path:
+            self.folder_error.setText("Please select a folder.")
+            return False
+        if not Path(path).is_dir():
+            self.folder_error.setText("The selected folder does not exist.")
+            return False
+        self.folder_value = path
+        self.folder_error.setText("")
+        return True
+
+    def _validate_faction(self) -> bool:
+        for name, rb in self.wizard_faction_radios.items():
+            if rb.isChecked():
+                self.faction_value = name
+                return True
+        return False
+
+    def _validate_rank(self) -> bool:
+        faction = self._get_selected_faction()
+        if not faction_requires_rank(faction):
+            return True
+        for name, rb in self.wizard_rank_radios.items():
+            if rb.isChecked():
+                self.rank_value = name
+                return True
+        QMessageBox.warning(self, "Rank", "Please select a rank.")
+        return False
+
+    def _validate_profile(self) -> bool:
+        name = self.wizard_name_edit.text().strip()
+        if name:
+            forbidden = set('\\/:*?"<>|')
+            if any(ch in forbidden for ch in name):
+                QMessageBox.warning(
+                    self, "Invalid Name",
+                    "The name contains characters that are not allowed in "
+                    "Windows folder names:\n\\ / : * ? \" < > |"
+                )
+                return False
+        self.game_name_value = name
+        for theme_name, rb in self.wizard_theme_radios.items():
+            if rb.isChecked():
+                self.theme_value = theme_name
+                break
+        return True
+
+    def _validate_all(self) -> bool:
+        if not self._validate_folder():
+            self.stack.setCurrentIndex(0)
+            self._update_nav()
+            return False
+        if not self._validate_faction():
+            self.stack.setCurrentIndex(1)
+            self._update_nav()
+            return False
+        if not self._validate_rank():
+            active = self._get_active_pages()
+            if 2 in active:
+                self.stack.setCurrentIndex(2)
+                self._update_nav()
+            return False
+        if not self._validate_profile():
+            self.stack.setCurrentIndex(3)
+            self._update_nav()
+            return False
+        return True
+
+    # ---------- signals ----------
+    def _on_folder_changed(self, text: str) -> None:
+        self.folder_value = text.strip()
+
+    def _on_faction_changed(self) -> None:
+        # Not called when no page access, but keeps state clean
+        self.faction_value = self._get_selected_faction()
+
+    def _on_theme_changed(self, theme: str) -> None:
+        self.theme_value = theme
+        self.setStyleSheet(QSS_DARK if theme == "dark" else QSS_LIGHT)
+
+    def _browse_wizard_folder(self) -> None:
+        start = self.wizard_folder_edit.text().strip()
+        if not start or not Path(start).is_dir():
+            start = str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, "Select MTA:SA Folder", start)
+        if folder:
+            self.wizard_folder_edit.setText(folder)
+
+
+# ---------------------------------------------------------------------------
+# Preview dialog — before creating the report
+# ---------------------------------------------------------------------------
+class PreviewDialog(QDialog):
+    def __init__(self, parent, faction_display: str, game_name: str,
+                 total_files: int, total_png_bytes: int,
+                 estimated_bytes: int, max_kb: int,
+                 free_bytes: int, target_path: Path):
+        super().__init__(parent)
+        self.setWindowTitle("Preview Work Report")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.faction_display = faction_display
+        self.game_name = game_name
+        self.total_files = total_files
+        self.total_png_bytes = total_png_bytes
+        self.estimated_bytes = estimated_bytes
+        self.max_kb = max_kb
+        self.free_bytes = free_bytes
+        self.target_path = target_path
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(14)
+
+        title = QLabel("📋 Review before creating")
+        title.setStyleSheet("font-size: 17px; font-weight: bold;")
+        root.addWidget(title)
+
+        hint = QLabel(
+            "Make sure everything looks right. Click Create to start."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7c93;")
+        root.addWidget(hint)
+
+        # Details card
+        card = QFrame()
+        card.setObjectName("card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 16, 18, 16)
+        v.setSpacing(8)
+
+        def row(label, value, value_color=None):
+            h = QHBoxLayout()
+            l = QLabel(label)
+            l.setStyleSheet("font-weight: bold;")
+            l.setMinimumWidth(180)
+            val = QLabel(str(value))
+            val.setWordWrap(True)
+            if value_color:
+                val.setStyleSheet(f"color: {value_color};")
+            h.addWidget(l)
+            h.addWidget(val, 1)
+            v.addLayout(h)
+
+        row("Faction", self.faction_display)
+        row("Game Name", self.game_name or "(not set)")
+        row("Total screenshots", f"{self.total_files:,}")
+        row("Current size (PNG)", format_size(self.total_png_bytes))
+        row("Compression", f"max {self.max_kb} KB per image")
+        row("Estimated output", format_size(self.estimated_bytes),
+            value_color="#27ae60")
+
+        # Free space — color coded
+        if self.free_bytes > 0:
+            free_color = "#27ae60"
+            if self.estimated_bytes > self.free_bytes * 0.9:
+                free_color = "#c0392b"
+            elif self.estimated_bytes > self.free_bytes * 0.5:
+                free_color = "#e67e22"
+            row("Free disk space", format_size(self.free_bytes),
+                value_color=free_color)
+
+        row("Target folder", str(self.target_path))
+
+        root.addWidget(card)
+
+        # Bottom buttons
+        btns = QHBoxLayout()
+        btns.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondaryButton")
+        cancel_btn.setMinimumHeight(40)
+        cancel_btn.setMinimumWidth(120)
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(cancel_btn)
+
+        create_btn = QPushButton("Create  ✓")
+        create_btn.setMinimumHeight(40)
+        create_btn.setMinimumWidth(160)
+        create_btn.setDefault(True)
+        create_btn.clicked.connect(self.accept)
+        btns.addWidget(create_btn)
+
+        root.addLayout(btns)
 
 
 # ---------------------------------------------------------------------------
@@ -1266,8 +1979,8 @@ class ProgressDialog(QDialog):
         root.addWidget(title)
 
         hint = QLabel(
-            "Please wait while PNG files are converted to JPG (max 250 KB) "
-            "and packed into a zip file."
+            "Please wait while PNG files are converted to JPG and packed "
+            "into a zip file."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #6b7c93;")
@@ -1400,13 +2113,15 @@ class ScreenshotPreviewDialog(QDialog):
 # ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
     def __init__(self, mta_folder: str, game_name: str | None,
-                 faction: str, rank: str | None, theme: str):
+                 faction: str, rank: str | None, theme: str,
+                 compression_kb: int = DEFAULT_COMPRESSION):
         super().__init__()
         self.mta_folder = mta_folder
         self.game_name = game_name or ""
         self.faction = faction
         self.rank = rank or DEFAULT_RANK
         self.theme = theme if theme in ("light", "dark") else DEFAULT_THEME
+        self.compression_kb = compression_kb if compression_kb in COMPRESSION_LEVELS else DEFAULT_COMPRESSION
 
         self._convert_worker: ConvertWorker | None = None
         self._convert_dialog: ProgressDialog | None = None
@@ -1414,8 +2129,8 @@ class MainWindow(QMainWindow):
         self._last_results: list | None = None
 
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(1000, 840)
-        self.resize(1080, 880)
+        self.setMinimumSize(1000, 880)
+        self.resize(1080, 920)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -1447,6 +2162,10 @@ class MainWindow(QMainWindow):
         act_create = QAction("Create Work Report", self)
         act_create.triggered.connect(self.create_report_folder)
         tools_menu.addAction(act_create)
+
+        act_missing = QAction("Create Missing Category Folders", self)
+        act_missing.triggered.connect(self.create_category_folders)
+        tools_menu.addAction(act_missing)
 
         tools_menu.addSeparator()
 
@@ -1616,10 +2335,10 @@ class MainWindow(QMainWindow):
         t2 = QLabel("Create Work Report")
         t2.setStyleSheet("font-size: 16px; font-weight: bold;")
         d2 = QLabel(
-            "Converts every PNG screenshot from the category folders into a "
-            "JPG file with a maximum size of 250 KB, places them in a Desktop "
-            "folder named after your in-game name, and finally compresses "
-            "that folder into a .zip file right next to it."
+            "Converts every PNG screenshot into a compressed JPG, places "
+            "them in a Desktop folder named after your in-game name, and "
+            "compresses it into a .zip file. A preview dialog shows the "
+            "details before starting."
         )
         d2.setWordWrap(True)
         d2.setStyleSheet("color: #6b7c93;")
@@ -1633,7 +2352,7 @@ class MainWindow(QMainWindow):
         c2.addWidget(create_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card2)
 
-        # Card 3 — Clear (DANGER)
+        # Card 3 — Create missing folders
         card3 = QFrame()
         card3.setObjectName("card")
         c3 = QHBoxLayout(card3)
@@ -1641,24 +2360,50 @@ class MainWindow(QMainWindow):
         c3.setSpacing(20)
         info3 = QVBoxLayout()
         info3.setSpacing(6)
-        t3 = QLabel("Clear Work Reports")
-        t3.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
+        t3 = QLabel("Create Missing Category Folders")
+        t3.setStyleSheet("font-size: 16px; font-weight: bold;")
         d3 = QLabel(
-            "Permanently deletes all files inside the category folders. "
-            "Folder structure is preserved. This action cannot be undone."
+            "Automatically creates any missing category folders for your "
+            "current faction inside the screenshots directory."
         )
         d3.setWordWrap(True)
         d3.setStyleSheet("color: #6b7c93;")
         info3.addWidget(t3)
         info3.addWidget(d3)
         c3.addLayout(info3, 1)
+        folders_btn = QPushButton("Create Folders")
+        folders_btn.setMinimumHeight(44)
+        folders_btn.setMinimumWidth(210)
+        folders_btn.clicked.connect(self.create_category_folders)
+        c3.addWidget(folders_btn, 0, Qt.AlignVCenter)
+        layout.addWidget(card3)
+
+        # Card 4 — Clear (DANGER)
+        card4 = QFrame()
+        card4.setObjectName("card")
+        c4 = QHBoxLayout(card4)
+        c4.setContentsMargins(22, 22, 22, 22)
+        c4.setSpacing(20)
+        info4 = QVBoxLayout()
+        info4.setSpacing(6)
+        t4 = QLabel("Clear Work Reports")
+        t4.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
+        d4 = QLabel(
+            "Permanently deletes all files inside the category folders. "
+            "Folder structure is preserved. This action cannot be undone."
+        )
+        d4.setWordWrap(True)
+        d4.setStyleSheet("color: #6b7c93;")
+        info4.addWidget(t4)
+        info4.addWidget(d4)
+        c4.addLayout(info4, 1)
         clear_btn = QPushButton("Clear Work Reports")
         clear_btn.setObjectName("dangerButton")
         clear_btn.setMinimumHeight(44)
         clear_btn.setMinimumWidth(210)
         clear_btn.clicked.connect(self.clear_reports)
-        c3.addWidget(clear_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card3)
+        c4.addWidget(clear_btn, 0, Qt.AlignVCenter)
+        layout.addWidget(card4)
 
         layout.addStretch()
         return page
@@ -1736,7 +2481,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(30, 24, 30, 30)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         back = QPushButton("←  Back")
@@ -1750,55 +2495,104 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
+
         def make_setting_card(label_text, button_text, slot):
             card = QFrame()
             card.setObjectName("card")
-            v = QVBoxLayout(card)
-            v.setContentsMargins(22, 22, 22, 22)
-            v.setSpacing(12)
+            cv = QVBoxLayout(card)
+            cv.setContentsMargins(22, 22, 22, 22)
+            cv.setSpacing(12)
             lbl = QLabel(label_text)
             lbl.setStyleSheet("font-weight: bold;")
-            v.addWidget(lbl)
+            cv.addWidget(lbl)
             val = QLabel()
             val.setWordWrap(True)
             val.setStyleSheet(
                 "background: rgba(0,0,0,0.04); padding:12px;"
                 "border-radius:6px; border: 1px solid rgba(0,0,0,0.08);"
             )
-            v.addWidget(val)
+            cv.addWidget(val)
             btn = QPushButton(button_text)
             btn.setMinimumHeight(38)
             btn.setMinimumWidth(180)
             btn.clicked.connect(slot)
-            v.addWidget(btn, 0, Qt.AlignLeft)
+            cv.addWidget(btn, 0, Qt.AlignLeft)
             return card, val, btn
 
         self.settings_folder_card, self.settings_folder_label, _ = make_setting_card(
             "MTA:SA Folder", "Change Folder...", self.change_folder
         )
-        layout.addWidget(self.settings_folder_card)
+        v.addWidget(self.settings_folder_card)
 
         self.settings_faction_card, self.settings_faction_label, _ = make_setting_card(
             "Faction", "Change Faction...", self.change_faction
         )
-        layout.addWidget(self.settings_faction_card)
+        v.addWidget(self.settings_faction_card)
 
         self.settings_rank_card, self.settings_rank_label, _ = make_setting_card(
             "Rank", "Change Rank...", self.change_rank
         )
-        layout.addWidget(self.settings_rank_card)
+        v.addWidget(self.settings_rank_card)
 
         self.settings_name_card, self.settings_name_label, _ = make_setting_card(
             "Game Name", "Change Game Name...", self.change_name
         )
-        layout.addWidget(self.settings_name_card)
+        v.addWidget(self.settings_name_card)
 
+        # Compression card
+        comp_card = QFrame()
+        comp_card.setObjectName("card")
+        ccv = QVBoxLayout(comp_card)
+        ccv.setContentsMargins(22, 22, 22, 22)
+        ccv.setSpacing(10)
+
+        comp_lbl = QLabel("Compression Level")
+        comp_lbl.setStyleSheet("font-weight: bold;")
+        ccv.addWidget(comp_lbl)
+
+        comp_hint = QLabel(
+            "Maximum size of each JPG after conversion. Lower values save "
+            "space but reduce image quality."
+        )
+        comp_hint.setWordWrap(True)
+        comp_hint.setStyleSheet("color: #6b7c93; font-size: 12px;")
+        ccv.addWidget(comp_hint)
+
+        self.compression_group = QButtonGroup(self)
+        self.compression_radios: dict[int, QRadioButton] = {}
+        for kb in COMPRESSION_LEVELS:
+            label = f"{kb} KB per image"
+            if kb == DEFAULT_COMPRESSION:
+                label += "  (default)"
+            rb = QRadioButton(label)
+            rb.setMinimumHeight(32)
+            rb.setChecked(kb == self.compression_kb)
+            rb.toggled.connect(
+                lambda checked, k=kb: self._on_compression_changed(k) if checked else None
+            )
+            self.compression_group.addButton(rb)
+            self.compression_radios[kb] = rb
+            ccv.addWidget(rb)
+
+        v.addWidget(comp_card)
+
+        # Theme card
         self.settings_theme_card, self.settings_theme_label, self.settings_theme_btn = make_setting_card(
             "Appearance", "Switch Theme", self.toggle_theme
         )
-        layout.addWidget(self.settings_theme_card)
+        v.addWidget(self.settings_theme_card)
 
-        layout.addStretch()
+        v.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
         return page
 
     # ---------------- Logic ----------------
@@ -2005,7 +2799,6 @@ class MainWindow(QMainWindow):
 
     # ---------------- Auto-Update ----------------
     def check_for_updates_manual(self) -> None:
-        """Manual check triggered from the Help menu."""
         checker = UpdateChecker(APP_VERSION, self)
         self._update_checker = checker
 
@@ -2037,7 +2830,6 @@ class MainWindow(QMainWindow):
         checker.start()
 
     def check_for_updates_silent(self) -> None:
-        """Silent check triggered at startup. Only shows dialog if update found."""
         skipped = get_skipped_version()
         checker = UpdateChecker(APP_VERSION, self)
         self._update_checker = checker
@@ -2054,10 +2846,9 @@ class MainWindow(QMainWindow):
                     pass
 
         def on_no_update():
-            pass  # silent
+            pass
 
         def on_failed(msg):
-            # Silent fail — likely offline
             print(f"[AutoUpdate] Check failed: {msg}")
 
         checker.update_available.connect(on_available)
@@ -2088,6 +2879,68 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         self.setStyleSheet(QSS_DARK if self.theme == "dark" else QSS_LIGHT)
+
+    # ---------------- Compression ----------------
+    def _on_compression_changed(self, kb: int) -> None:
+        self.compression_kb = kb
+        try:
+            save_compression(kb)
+        except OSError:
+            pass
+
+    # ---------------- Create Missing Folders ----------------
+    def create_category_folders(self) -> None:
+        # Confirm
+        specs = get_faction_folder_specs(self.faction)
+        if not specs:
+            QMessageBox.warning(
+                self, "Unknown Faction",
+                f"No folder specifications found for faction '{self.faction}'."
+            )
+            return
+
+        folder_list = "\n".join(f"  •  {name}" for name, _ in specs)
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Question)
+        confirm.setWindowTitle("Create Missing Folders")
+        confirm.setText("Create missing category folders?")
+        confirm.setInformativeText(
+            f"The following folders will be created inside:\n"
+            f"{Path(self.mta_folder) / 'screenshots'}\n\n"
+            f"{folder_list}\n\n"
+            "Existing folders will be left untouched."
+        )
+        yes_btn = confirm.addButton("Create", QMessageBox.YesRole)
+        no_btn = confirm.addButton("Cancel", QMessageBox.NoRole)
+        confirm.setDefaultButton(yes_btn)
+        confirm.exec()
+
+        if confirm.clickedButton() is not yes_btn:
+            return
+
+        created, skipped, error = create_faction_folders(self.mta_folder, self.faction)
+
+        if error and created == 0:
+            QMessageBox.warning(
+                self, "Create Folders Failed",
+                f"Could not create folders:\n{error}"
+            )
+            return
+
+        if error:
+            QMessageBox.warning(
+                self, "Partially Completed",
+                f"Created {created} folder(s), skipped {skipped}.\n"
+                f"Some errors occurred:\n\n{error}"
+            )
+            return
+
+        QMessageBox.information(
+            self, "Folders Ready",
+            f"Done!\n\n"
+            f"Created: {created}\n"
+            f"Already existed: {skipped}"
+        )
 
     # ---------------- Folder / Faction / Rank / Name ----------------
     def _ensure_game_name(self) -> str | None:
@@ -2128,8 +2981,8 @@ class MainWindow(QMainWindow):
         if not name:
             return
 
-        total = count_total_pngs(self.mta_folder, self.faction, self.rank)
-        if total == 0:
+        total_files = count_total_pngs(self.mta_folder, self.faction, self.rank)
+        if total_files == 0:
             QMessageBox.warning(
                 self, "Create Report Error",
                 "No PNG screenshots were found inside any category folder.\n"
@@ -2137,8 +2990,57 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._convert_dialog = ProgressDialog(self, total)
-        worker = ConvertWorker(self.mta_folder, name, self.faction, self.rank, self)
+        # Estimate sizes
+        total_png_bytes = estimate_png_size(self.mta_folder, self.faction, self.rank)
+        estimated_bytes = estimate_output_size(total_png_bytes, total_files, self.compression_kb)
+
+        # Get desktop path + free space
+        desktop_path = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
+        if not desktop_path:
+            QMessageBox.warning(self, "Error", "Could not determine Desktop location.")
+            return
+        desktop = Path(desktop_path)
+        if not desktop.is_dir():
+            QMessageBox.warning(self, "Error", f"Desktop folder not found:\n{desktop}")
+            return
+
+        try:
+            free_bytes = shutil.disk_usage(desktop).free
+        except OSError:
+            free_bytes = 0
+
+        # Disk space check
+        if free_bytes > 0 and estimated_bytes > free_bytes * 0.9:
+            QMessageBox.warning(
+                self, "Not Enough Disk Space",
+                "There may not be enough free disk space to complete this task.\n\n"
+                f"<b>Estimated output:</b> {format_size(estimated_bytes)}<br>"
+                f"<b>Free space on Desktop drive:</b> {format_size(free_bytes)}<br><br>"
+                "Please free up some space and try again."
+            )
+            return
+
+        # Show preview dialog
+        preview = PreviewDialog(
+            self,
+            faction_display=self._faction_display(),
+            game_name=name,
+            total_files=total_files,
+            total_png_bytes=total_png_bytes,
+            estimated_bytes=estimated_bytes,
+            max_kb=self.compression_kb,
+            free_bytes=free_bytes,
+            target_path=desktop / name,
+        )
+        if preview.exec() != QDialog.Accepted:
+            return
+
+        # Start worker
+        self._convert_dialog = ProgressDialog(self, total_files)
+        worker = ConvertWorker(
+            self.mta_folder, name, self.faction, self.rank,
+            max_kb=self.compression_kb, parent=self
+        )
         self._convert_worker = worker
         worker.progress.connect(self._convert_dialog.update_progress)
         worker.finished_ok.connect(self._on_convert_finished)
@@ -2158,7 +3060,7 @@ class MainWindow(QMainWindow):
             self, "Work Report Created",
             "The work report was created successfully.\n\n"
             f"Faction: {self._faction_display()}\n"
-            "All PNG screenshots were converted to JPG (max 250 KB each).\n\n"
+            f"Compression: max {self.compression_kb} KB per image\n\n"
             f"Folder:\n{target}\n\n"
             f"Zip:\n{zip_path}"
         )
@@ -2321,8 +3223,10 @@ class MainWindow(QMainWindow):
             "• Stores the MTA:SA folder, faction, rank, and game name in the "
             "Windows registry.<br>"
             "• Calculates a work report using faction- and rank-specific prices.<br>"
-            "• Converts PNG screenshots to JPG (max 250 KB each) and creates "
-            "a zipped work report on the Desktop.<br>"
+            "• Converts PNG screenshots to JPG with adjustable compression "
+            "(250 / 200 / 150 KB).<br>"
+            "• Creates a zipped work report on the Desktop with a preview "
+            "and disk-space check before starting.<br>"
             "• Exports reports to CSV or PDF.<br>"
             "• Previews screenshots by double-clicking a category row.<br>"
             "• Supports both Light and Dark themes.<br>"
@@ -2342,60 +3246,94 @@ def main() -> int:
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 1) Folder
     folder = get_saved_folder()
-    if not folder or not Path(folder).is_dir():
-        dlg = FolderPickerDialog(None, folder or "")
-        if dlg.exec() != QDialog.Accepted or not dlg.selected_path:
-            return 0
-        try:
-            save_folder(dlg.selected_path)
-        except OSError as exc:
-            QMessageBox.critical(None, "Registry Error",
-                                 f"Failed to save the folder:\n{exc}")
-            return 1
-        folder = dlg.selected_path
-
-    # 2) Faction
     faction = get_saved_faction()
-    if not faction:
-        dlg = FactionDialog(None, None)
-        if dlg.exec() != QDialog.Accepted or not dlg.faction_value:
-            return 0
-        try:
-            save_faction(dlg.faction_value)
-        except OSError as exc:
-            QMessageBox.critical(None, "Registry Error",
-                                 f"Failed to save the faction:\n{exc}")
-            return 1
-        faction = dlg.faction_value
-
-    # 3) Rank
     rank = get_saved_rank()
-    if faction_requires_rank(faction) and not rank:
-        dlg = RankDialog(None, faction, None)
-        if dlg.exec() != QDialog.Accepted or not dlg.rank_value:
-            return 0
-        try:
-            save_rank(dlg.rank_value)
-        except OSError as exc:
-            QMessageBox.critical(None, "Registry Error",
-                                 f"Failed to save the rank:\n{exc}")
-            return 1
-        rank = dlg.rank_value
-
-    # 4) Game name (on demand)
     game_name = get_saved_name()
-
-    # 5) Theme
     theme = get_saved_theme()
+    compression_kb = get_saved_compression()
 
-    window = MainWindow(folder, game_name, faction, rank, theme)
+    # First launch → Wizard
+    is_first_launch = (not folder or not Path(folder).is_dir()) and not faction
+
+    if is_first_launch:
+        wizard = SetupWizard(
+            None,
+            initial_folder=folder or "",
+            initial_faction=faction,
+            initial_rank=rank,
+            initial_theme=theme,
+        )
+        if wizard.exec() != QDialog.Accepted:
+            return 0
+
+        folder = wizard.folder_value
+        faction = wizard.faction_value
+        rank = wizard.rank_value
+        game_name = wizard.game_name_value
+        theme = wizard.theme_value
+
+        try:
+            save_folder(folder)
+            save_faction(faction)
+            if faction_requires_rank(faction) and rank:
+                save_rank(rank)
+            if game_name:
+                save_name(game_name)
+            save_theme(theme)
+        except OSError as exc:
+            QMessageBox.critical(
+                None, "Registry Error",
+                f"Failed to save setup to the registry:\n{exc}"
+            )
+            return 1
+    else:
+        # Normal launch — validate essentials
+        if not folder or not Path(folder).is_dir():
+            dlg = FolderPickerDialog(None, folder or "")
+            if dlg.exec() != QDialog.Accepted or not dlg.selected_path:
+                return 0
+            try:
+                save_folder(dlg.selected_path)
+            except OSError as exc:
+                QMessageBox.critical(None, "Registry Error",
+                                     f"Failed to save the folder:\n{exc}")
+                return 1
+            folder = dlg.selected_path
+
+        if not faction:
+            dlg = FactionDialog(None, None)
+            if dlg.exec() != QDialog.Accepted or not dlg.faction_value:
+                return 0
+            try:
+                save_faction(dlg.faction_value)
+            except OSError as exc:
+                QMessageBox.critical(None, "Registry Error",
+                                     f"Failed to save the faction:\n{exc}")
+                return 1
+            faction = dlg.faction_value
+
+        if faction_requires_rank(faction) and not rank:
+            dlg = RankDialog(None, faction, None)
+            if dlg.exec() != QDialog.Accepted or not dlg.rank_value:
+                return 0
+            try:
+                save_rank(dlg.rank_value)
+            except OSError as exc:
+                QMessageBox.critical(None, "Registry Error",
+                                     f"Failed to save the rank:\n{exc}")
+                return 1
+            rank = dlg.rank_value
+
+        game_name = get_saved_name()
+        theme = get_saved_theme()
+        compression_kb = get_saved_compression()
+
+    window = MainWindow(folder, game_name, faction, rank, theme, compression_kb)
     if icon_path.exists():
         window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
 
-    # Silent update check ~2 seconds after the UI is ready
     QTimer.singleShot(2000, window.check_for_updates_silent)
 
     return app.exec()
