@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.10.2  ( Made By AmooReza )
+MTA Assistant - v1.10.3  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -17,7 +17,10 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal, QSize, QUrl, QTimer, QMarginsF
-from PySide6.QtGui import QAction, QIcon, QPixmap, QTextDocument, QDesktopServices, QPageSize, QPageLayout, QCursor
+from PySide6.QtGui import (
+    QAction, QIcon, QPixmap, QTextDocument, QDesktopServices,
+    QPageSize, QPageLayout, QCursor, QIntValidator
+)
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -37,7 +40,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.10.2"
+APP_VERSION = "1.10.3"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -160,6 +163,21 @@ STAT_BAR_PALETTE = [
     "#f39c12", "#9b59b6", "#1abc9c", "#e67e22",
 ]
 
+# --- Fine Calculator (Police Department only) ---
+FINE_BASE = 5000
+FINE_STEP = 2000
+FINE_SPEED_STEP = 20
+
+FINE_LOCATIONS = [
+    ("LS City", 120, "Los Santos city limits"),
+    ("LV City", 170, "Las Venturas city limits"),
+    ("SF City", 180, "San Fierro city limits"),
+    ("Heavy Traffic Areas", 100, "Crossroads, Civilian Spawn, License route"),
+    ("Highway / Outside Cities", 240, "Roads and highways around the cities"),
+]
+
+PD_FACTION_NAME = "Police Department"
+
 
 def is_coming_soon(faction: str) -> bool:
     return faction in COMING_SOON_FACTIONS
@@ -189,6 +207,28 @@ def get_faction_folder_specs(faction: str):
     if faction in FACTIONS:
         return [(n, k) for n, k, _ in FACTIONS[faction]]
     return []
+
+
+def calculate_fine(limit_kmh: int, speed_kmh: int):
+    """
+    Returns a dict with details of the fine, or None if no violation.
+    Formula: base $5000 + every 20 km/h over the limit adds $2000.
+    """
+    if speed_kmh <= limit_kmh:
+        return None
+    excess = speed_kmh - limit_kmh
+    steps = excess // FINE_SPEED_STEP
+    extra = steps * FINE_STEP
+    total = FINE_BASE + extra
+    return {
+        "limit": limit_kmh,
+        "speed": speed_kmh,
+        "excess": excess,
+        "steps": steps,
+        "base": FINE_BASE,
+        "extra": extra,
+        "total": total,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2132,12 +2172,14 @@ class MainWindow(QMainWindow):
         self.tools_page = self._create_tools_page()
         self.report_page = self._create_report_page()
         self.stats_page = self._create_stats_page()
+        self.fine_calc_page = self._create_fine_calc_page()
         self.settings_page = self._create_settings_page()
 
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.tools_page)
         self.stack.addWidget(self.report_page)
         self.stack.addWidget(self.stats_page)
+        self.stack.addWidget(self.fine_calc_page)
         self.stack.addWidget(self.settings_page)
 
         self._build_menu()
@@ -2147,19 +2189,16 @@ class MainWindow(QMainWindow):
 
     # ---------------- Window centering ----------------
     def showEvent(self, event):
-        """Center the main window on screen the first time it's shown."""
         super().showEvent(event)
         if not self._initial_centering_done:
             self._initial_centering_done = True
             QTimer.singleShot(0, self._center_on_screen)
 
     def _center_on_screen(self) -> None:
-        # Prefer the screen under the mouse, fall back to primary
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is None:
             return
         geo = screen.availableGeometry()
-        # Shrink if the window is larger than the screen
         w = min(self.width(), geo.width() - 40)
         h = min(self.height(), geo.height() - 40)
         self.resize(w, h)
@@ -2183,6 +2222,10 @@ class MainWindow(QMainWindow):
         act_missing = QAction("Create Missing Category Folders", self)
         act_missing.triggered.connect(self.create_category_folders)
         tools_menu.addAction(act_missing)
+
+        self.act_fine = QAction("🚔 Calculate Fine", self)
+        self.act_fine.triggered.connect(self.open_fine_calculator)
+        tools_menu.addAction(self.act_fine)
 
         tools_menu.addSeparator()
 
@@ -2408,32 +2451,62 @@ class MainWindow(QMainWindow):
         c3.addWidget(folders_btn, 0, Qt.AlignVCenter)
         layout.addWidget(card3)
 
-        # Card 4 — Clear (danger)
-        card4 = QFrame()
-        card4.setObjectName("card")
-        c4 = QHBoxLayout(card4)
-        c4.setContentsMargins(22, 22, 22, 22)
-        c4.setSpacing(20)
-        info4 = QVBoxLayout()
-        info4.setSpacing(6)
-        t4 = QLabel("Clear Work Reports")
-        t4.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
-        d4 = QLabel(
+        # Card 4 — Fine Calculator (Police Department only)
+        self.fine_card = QFrame()
+        self.fine_card.setObjectName("card")
+        fc = QHBoxLayout(self.fine_card)
+        fc.setContentsMargins(22, 22, 22, 22)
+        fc.setSpacing(20)
+
+        fine_info = QVBoxLayout()
+        fine_info.setSpacing(6)
+        fine_title = QLabel("🚔  Calculate Fine")
+        fine_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        fine_desc = QLabel(
+            "Calculate the speed violation fine for a player. "
+            "Choose a location, enter the driver's speed, and get the "
+            "total fine based on the standard formula."
+        )
+        fine_desc.setWordWrap(True)
+        fine_desc.setObjectName("hintLabel")
+        fine_info.addWidget(fine_title)
+        fine_info.addWidget(fine_desc)
+        fc.addLayout(fine_info, 1)
+
+        fine_btn = QPushButton("Open Fine Calculator")
+        fine_btn.setMinimumHeight(44)
+        fine_btn.setMinimumWidth(210)
+        fine_btn.clicked.connect(self.open_fine_calculator)
+        fc.addWidget(fine_btn, 0, Qt.AlignVCenter)
+
+        layout.addWidget(self.fine_card)
+
+        # Card 5 — Clear (danger)
+        card5 = QFrame()
+        card5.setObjectName("card")
+        c5 = QHBoxLayout(card5)
+        c5.setContentsMargins(22, 22, 22, 22)
+        c5.setSpacing(20)
+        info5 = QVBoxLayout()
+        info5.setSpacing(6)
+        t5 = QLabel("Clear Work Reports")
+        t5.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
+        d5 = QLabel(
             "Permanently deletes all files inside the category folders. "
             "Folder structure is preserved. This action cannot be undone."
         )
-        d4.setWordWrap(True)
-        d4.setObjectName("hintLabel")
-        info4.addWidget(t4)
-        info4.addWidget(d4)
-        c4.addLayout(info4, 1)
+        d5.setWordWrap(True)
+        d5.setObjectName("hintLabel")
+        info5.addWidget(t5)
+        info5.addWidget(d5)
+        c5.addLayout(info5, 1)
         clear_btn = QPushButton("Clear Work Reports")
         clear_btn.setObjectName("dangerButton")
         clear_btn.setMinimumHeight(44)
         clear_btn.setMinimumWidth(210)
         clear_btn.clicked.connect(self.clear_reports)
-        c4.addWidget(clear_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card4)
+        c5.addWidget(clear_btn, 0, Qt.AlignVCenter)
+        layout.addWidget(card5)
 
         layout.addStretch()
         return page
@@ -2591,6 +2664,163 @@ class MainWindow(QMainWindow):
 
         return card, val
 
+    def _create_fine_calc_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(30, 24, 30, 30)
+        layout.setSpacing(16)
+
+        # Header
+        header = QHBoxLayout()
+        back = QPushButton("←  Back")
+        back.setObjectName("backButton")
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.tools_page))
+        header.addWidget(back)
+        header.addStretch()
+        layout.addLayout(header)
+
+        title = QLabel("🚔  Fine Calculator")
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        layout.addWidget(title)
+
+        info = QLabel(
+            "Calculate the speed violation fine for a player. "
+            "Formula: $5,000 base + $2,000 for every 20 KM/H over the limit."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("hintLabel")
+        layout.addWidget(info)
+
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(14)
+
+        # --- Location card ---
+        loc_card = QFrame()
+        loc_card.setObjectName("card")
+        lcv = QVBoxLayout(loc_card)
+        lcv.setContentsMargins(22, 22, 22, 22)
+        lcv.setSpacing(10)
+
+        loc_title = QLabel("1.  Location")
+        loc_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        lcv.addWidget(loc_title)
+
+        loc_hint = QLabel("Pick the area where the violation happened.")
+        loc_hint.setObjectName("hintLabel")
+        loc_hint.setStyleSheet("font-size: 12px;")
+        lcv.addWidget(loc_hint)
+
+        self.fine_location_group = QButtonGroup(self)
+        self.fine_location_radios: dict[str, QRadioButton] = {}
+        first_key = FINE_LOCATIONS[0][0]
+
+        for name, limit, desc in FINE_LOCATIONS:
+            rb = QRadioButton(f"{name}   —   {limit} KM/H")
+            rb.setMinimumHeight(36)
+            rb.setStyleSheet("QRadioButton { padding: 8px 12px; font-size: 14px; }")
+            rb.setChecked(name == first_key)
+            rb.toggled.connect(self._on_fine_input_changed)
+            self.fine_location_group.addButton(rb)
+            self.fine_location_radios[name] = rb
+            lcv.addWidget(rb)
+
+            desc_lbl = QLabel(f"     {desc}")
+            desc_lbl.setObjectName("hintLabel")
+            desc_lbl.setStyleSheet("font-size: 11px; margin-left: 26px;")
+            lcv.addWidget(desc_lbl)
+
+        cv.addWidget(loc_card)
+
+        # --- Speed card ---
+        speed_card = QFrame()
+        speed_card.setObjectName("card")
+        scv = QVBoxLayout(speed_card)
+        scv.setContentsMargins(22, 22, 22, 22)
+        scv.setSpacing(10)
+
+        speed_title = QLabel("2.  Driver's Speed")
+        speed_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        scv.addWidget(speed_title)
+
+        speed_hint = QLabel("Enter the speed recorded by the camera (KM/H).")
+        speed_hint.setObjectName("hintLabel")
+        speed_hint.setStyleSheet("font-size: 12px;")
+        scv.addWidget(speed_hint)
+
+        speed_row = QHBoxLayout()
+        self.fine_speed_edit = QLineEdit()
+        self.fine_speed_edit.setPlaceholderText("e.g. 140")
+        self.fine_speed_edit.setMinimumHeight(38)
+        self.fine_speed_edit.setMaximumWidth(220)
+        validator = QIntValidator(0, 999, self)
+        self.fine_speed_edit.setValidator(validator)
+        self.fine_speed_edit.textChanged.connect(self._on_fine_input_changed)
+        speed_row.addWidget(self.fine_speed_edit)
+        unit_lbl = QLabel("KM/H")
+        unit_lbl.setStyleSheet("font-weight: bold;")
+        speed_row.addWidget(unit_lbl)
+        speed_row.addStretch()
+        scv.addLayout(speed_row)
+
+        cv.addWidget(speed_card)
+
+        # --- Action buttons ---
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+
+        calc_btn = QPushButton("Calculate Fine")
+        calc_btn.setMinimumHeight(44)
+        calc_btn.setMinimumWidth(180)
+        calc_btn.clicked.connect(self._on_fine_calculate)
+        action_row.addWidget(calc_btn)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setObjectName("secondaryButton")
+        reset_btn.setMinimumHeight(44)
+        reset_btn.setMinimumWidth(120)
+        reset_btn.clicked.connect(self._on_fine_reset)
+        action_row.addWidget(reset_btn)
+
+        action_row.addStretch()
+        cv.addLayout(action_row)
+
+        # --- Result card ---
+        self.fine_result_card = QFrame()
+        self.fine_result_card.setObjectName("card")
+        self.fine_result_card.setVisible(False)
+        rcv = QVBoxLayout(self.fine_result_card)
+        rcv.setContentsMargins(22, 20, 22, 20)
+        rcv.setSpacing(8)
+
+        self.fine_result_title = QLabel("Result")
+        self.fine_result_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        rcv.addWidget(self.fine_result_title)
+
+        self.fine_result_details = QLabel()
+        self.fine_result_details.setWordWrap(True)
+        self.fine_result_details.setStyleSheet("font-size: 13px;")
+        rcv.addWidget(self.fine_result_details)
+
+        self.fine_result_total = QLabel()
+        self.fine_result_total.setStyleSheet(
+            "font-size: 24px; font-weight: bold; padding: 12px 0;"
+        )
+        rcv.addWidget(self.fine_result_total)
+
+        cv.addWidget(self.fine_result_card)
+
+        cv.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        return page
+
     def _create_settings_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -2741,6 +2971,7 @@ class MainWindow(QMainWindow):
                 f"⚠  Prices for this faction have not been announced yet. "
                 f"This feature will be added in a future update."
             )
+            self._refresh_fine_visibility()
             return
 
         prices = get_prices(self.faction, self.rank)
@@ -2754,6 +2985,8 @@ class MainWindow(QMainWindow):
             f"{header} — counts PNG screenshots and applies the following "
             f"prices:\n" + "  •  ".join(parts)
         )
+
+        self._refresh_fine_visibility()
 
     def _faction_display(self) -> str:
         if faction_requires_rank(self.faction):
@@ -2842,6 +3075,105 @@ class MainWindow(QMainWindow):
             return
 
         ScreenshotPreviewDialog(self, display_name, pngs).exec()
+
+    # ---------------- Fine Calculator ----------------
+    def _get_selected_fine_location(self):
+        for name, limit, _ in FINE_LOCATIONS:
+            rb = self.fine_location_radios.get(name)
+            if rb is not None and rb.isChecked():
+                return name, limit
+        return FINE_LOCATIONS[0][0], FINE_LOCATIONS[0][1]
+
+    def _on_fine_input_changed(self, *args) -> None:
+        if hasattr(self, "fine_result_card"):
+            self.fine_result_card.setVisible(False)
+
+    def _on_fine_reset(self) -> None:
+        if hasattr(self, "fine_speed_edit"):
+            self.fine_speed_edit.clear()
+        first_name = FINE_LOCATIONS[0][0]
+        rb = self.fine_location_radios.get(first_name)
+        if rb is not None:
+            rb.setChecked(True)
+        if hasattr(self, "fine_result_card"):
+            self.fine_result_card.setVisible(False)
+
+    def _on_fine_calculate(self) -> None:
+        name, limit = self._get_selected_fine_location()
+
+        text = self.fine_speed_edit.text().strip()
+        if not text:
+            QMessageBox.warning(
+                self, "Missing Speed",
+                "Please enter the driver's speed in KM/H."
+            )
+            return
+
+        try:
+            speed = int(text)
+        except ValueError:
+            QMessageBox.warning(
+                self, "Invalid Speed",
+                "Please enter a valid number for the speed."
+            )
+            return
+
+        if speed < 0 or speed > 999:
+            QMessageBox.warning(
+                self, "Invalid Speed",
+                "Speed must be between 0 and 999 KM/H."
+            )
+            return
+
+        result = calculate_fine(limit, speed)
+
+        if result is None:
+            self.fine_result_title.setText(f"Result — {name}")
+            self.fine_result_details.setText(
+                f"Speed limit:     <b>{limit} KM/H</b><br>"
+                f"Driver's speed:  <b>{speed} KM/H</b><br><br>"
+                f"No speed violation detected."
+            )
+            self.fine_result_total.setText("✅  No Fine")
+            self.fine_result_total.setStyleSheet(
+                "font-size: 24px; font-weight: bold; padding: 12px 0;"
+                "color: #27ae60;"
+            )
+        else:
+            self.fine_result_title.setText(f"Result — {name}")
+            self.fine_result_details.setText(
+                f"Speed limit:     <b>{result['limit']} KM/H</b><br>"
+                f"Driver's speed:  <b>{result['speed']} KM/H</b><br>"
+                f"Excess:          <b>{result['excess']} KM/H</b><br><br>"
+                f"Base fine:       <b>${result['base']:,}</b><br>"
+                f"Additional:      <b>{result['steps']} × ${FINE_STEP:,} = "
+                f"${result['extra']:,}</b>"
+            )
+            self.fine_result_total.setText(f"💰  Total Fine:  ${result['total']:,}")
+            self.fine_result_total.setStyleSheet(
+                "font-size: 24px; font-weight: bold; padding: 12px 0;"
+                "color: #e74c3c;"
+            )
+
+        self.fine_result_card.setVisible(True)
+
+    def open_fine_calculator(self) -> None:
+        if self.faction != PD_FACTION_NAME:
+            QMessageBox.information(
+                self, "Police Department Only",
+                "The Fine Calculator is only available for the "
+                "Police Department faction."
+            )
+            return
+        self._on_fine_reset()
+        self.stack.setCurrentWidget(self.fine_calc_page)
+
+    def _refresh_fine_visibility(self) -> None:
+        is_pd = (self.faction == PD_FACTION_NAME)
+        if hasattr(self, "fine_card"):
+            self.fine_card.setVisible(is_pd)
+        if hasattr(self, "act_fine"):
+            self.act_fine.setEnabled(is_pd)
 
     # ---------------- Stats Dashboard ----------------
     def open_stats(self) -> None:
@@ -3444,6 +3776,7 @@ class MainWindow(QMainWindow):
             "• Converts PNG screenshots to JPG with adjustable compression.<br>"
             "• Creates a zipped work report on the Desktop with a preview "
             "and disk-space check before starting.<br>"
+            "• 🚔 Fine Calculator for Police Department (speed violations).<br>"
             "• Faction Stats Dashboard with visual category breakdown.<br>"
             "• Progress dialog with live ETA.<br>"
             "• Exports reports to CSV or PDF.<br>"
