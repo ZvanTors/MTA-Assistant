@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.10.3  ( Made By AmooReza )
+MTA Assistant - v1.11.1  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 """
 
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QPushButton, QFileDialog, QMessageBox, QMainWindow, QWidget,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QRadioButton, QButtonGroup, QProgressBar, QScrollArea, QGridLayout,
-    QCheckBox
+    QCheckBox, QTabWidget, QSpinBox
 )
 
 try:
@@ -40,7 +40,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.10.3"
+APP_VERSION = "1.11.1"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -178,6 +178,54 @@ FINE_LOCATIONS = [
 
 PD_FACTION_NAME = "Police Department"
 
+# --- Sub-Leaders Panel — TEST tab templates ---
+TEST_START_MESSAGE_TEMPLATE = (
+    "say #777777 Test ID #2DD3D3 {name} #09ff09 Started. "
+    "#777777 [#33CCFF AFK , Time Out #33CCFF , Quit ,  3/3 Av "
+    "#33CCFF = #ff0000 Rad #777777 ]"
+)
+
+TEST_QUESTIONS = [
+    "say #00BFFF 1. Non-Rp Chist? +1 Mesal (#DDA0DD30 Sec#00BFFF)",
+    "say #00BFFF 2. Nahve Sahih Khoroj Az Faction Chist? (#DDA0DD15 Sec#00BFFF)",
+    "say #00BFFF 3. Agar Fardi Dar Faction F.B.I Abuse Konad Modat Zaman Black List An Be Che Sorat Ast? (#DDA0DD20 Sec#00BFFF)",
+    "say #00BFFF 4. Meeting Mored Niyaz Rank 1 Ta 5 Ro Nam Bebarid.(#DDA0DD15 Sec#00BFFF)",
+    "say #00BFFF 5. Daryaft Fw Che Tasiri Dar Ravand Daryaft Hoqooq Darad? (#DDA0DD10 Sec#00BFFF)",
+    "say #00BFFF 6. 2Ta Wanted 1 Nam Bebar. (#DDA0DD15 Sec#00BFFF)",
+    "say #00BFFF 7. Gerefran Screen F9 (Aslahe) Dar Che Makan Haii Ghair Mojaz Ast? (2Mored)",
+    "say #00BFFF 8. Megafon /m2 , /m4 Ro Tohiz Bede. (#DDA0DD20 Sec#00BFFF)",
+    "say #00BFFF 9. Hargone Tark , AFK , Sleep Dar Time Shift Che Mojazati Dar Pay Dard? (#DDA0DD5 Sec#00BFFF)",
+    "say #00BFFF 10. Ba Daryaft 2 Fw Dar Hafte Aval Che Mojazati Dar Pay Darad. (#DDA0DD10 Sec#00BFFF)",
+    "say #00BFFF 11. HadeAksar Hajm Har Screen Gozareshkar Chegadr Mibashad.(#DDA0DD7Sec#00BFFF)",
+    "say #00BFFF 12. Daryaft Fw Chand FP Be Kol FP Ha Ezafe Mikone? (#DDA0DD7 Sec#00BFFF)",
+    "say #00BFFF 13. FP Har Rank Ro Bego. (#DDA0DD1~>5#00BFFF)",
+]
+
+TEST_ACCEPT_TEMPLATE = (
+    "say #2DD3D3 Shoma Dar Test Faction [#266DB4 Police Department] "
+    "Ba {av}/3 Av Accpet Shodid !"
+)
+
+TEST_REJECT_MESSAGE = (
+    "say  #777777 Shoma Dar Test Faction #266DB4Police Department "
+    "#777777Ba #33CCFF 3#FF3333/#33CCFF3 #FF3333AV Rad Shodid !"
+)
+
+TEST_LOG_D_TEMPLATE = 'd The New Member Of Police Department " {name} " | #Wlc'
+
+# --- FP Calculator constants ---
+FP_BASE_BY_RANK = {
+    1: 30,
+    2: 20,
+    3: 15,
+    4: 10,
+    5: 5,
+    # Rank 6 is special — depends on the "main rank" (before promotion)
+}
+FP_PER_FW = 15
+FP_DIRECT_KICK = 80
+FP_RESIGN_FIRST_WEEK = 60
+
 
 def is_coming_soon(faction: str) -> bool:
     return faction in COMING_SOON_FACTIONS
@@ -210,10 +258,6 @@ def get_faction_folder_specs(faction: str):
 
 
 def calculate_fine(limit_kmh: int, speed_kmh: int):
-    """
-    Returns a dict with details of the fine, or None if no violation.
-    Formula: base $5000 + every 20 km/h over the limit adds $2000.
-    """
     if speed_kmh <= limit_kmh:
         return None
     excess = speed_kmh - limit_kmh
@@ -229,6 +273,65 @@ def calculate_fine(limit_kmh: int, speed_kmh: int):
         "extra": extra,
         "total": total,
     }
+
+
+def calculate_fp(rank: int, main_rank: int | None, fw_count: int,
+                 is_outlaw: bool, insult_leader: bool,
+                 high_insult: bool, two_fw_first_week: bool,
+                 four_plus_fw: bool, resign_first_week: bool):
+    """
+    Returns (total_fp, breakdown_lines, override_reason_or_None).
+    Priority:
+      1. Any "direct kick 80 FP" condition → 80 FP, no other math.
+      2. Resignation in less than 1 week → 60 FP.
+      3. Otherwise: base by rank + (FW × 15).
+    """
+    # Direct kick conditions
+    reasons = []
+    if is_outlaw:
+        reasons.append("Player is Outlaw / Bad")
+    if insult_leader:
+        reasons.append("Insulting the leader")
+    if high_insult:
+        reasons.append("High-level insult in faction chat")
+    if two_fw_first_week:
+        reasons.append("Received 2 separate FWs in the first 7 days")
+    if four_plus_fw:
+        reasons.append("Has 4 or more total FWs")
+
+    if reasons:
+        return (
+            FP_DIRECT_KICK,
+            [f"Direct kick reason: {r}" for r in reasons],
+            "Direct kick (80 FP)",
+        )
+
+    if resign_first_week:
+        return (
+            FP_RESIGN_FIRST_WEEK,
+            ["Resigned in less than 1 week of joining the faction"],
+            "Early resignation",
+        )
+
+    # Normal calculation
+    effective_rank = rank
+    if rank == 6:
+        effective_rank = main_rank if main_rank else 1
+
+    base = FP_BASE_BY_RANK.get(effective_rank, 30)
+    fw_fp = fw_count * FP_PER_FW
+    total = base + fw_fp
+
+    lines = []
+    if rank == 6:
+        lines.append(
+            f"Rank 6 — using main Rank {effective_rank} as base: {base} FP"
+        )
+    else:
+        lines.append(f"Rank {effective_rank} base FP: {base}")
+    lines.append(f"{fw_count} × FW: {fw_count} × {FP_PER_FW} = {fw_fp} FP")
+
+    return total, lines, None
 
 
 # ---------------------------------------------------------------------------
@@ -888,11 +991,11 @@ QSS_LIGHT = """
     QPushButton#dangerButton:hover { background: #c0392b; }
     QPushButton#dangerButton:pressed { background: #a93226; }
     QPushButton#dangerButton:disabled { background: #e6b0aa; }
-    QLineEdit {
+    QLineEdit, QSpinBox {
         background: #ffffff; border: 1px solid #d6dee6; border-radius: 6px;
         padding: 6px 10px; selection-background-color: #3498db;
     }
-    QLineEdit:focus { border: 1px solid #3498db; }
+    QLineEdit:focus, QSpinBox:focus { border: 1px solid #3498db; }
     QRadioButton { color: #2c3e50; spacing: 10px; }
     QRadioButton::indicator {
         width: 16px; height: 16px; border: 2px solid #b0bec5;
@@ -935,6 +1038,20 @@ QSS_LIGHT = """
         background: #eaf4fc; padding: 12px 16px; border-radius: 8px;
     }
     QLabel#hintLabel { color: #6b7c93; }
+    QTabWidget::pane {
+        border: 1px solid #e1e8ed; border-radius: 8px;
+        background: #ffffff; top: -1px;
+    }
+    QTabBar::tab {
+        background: #ecf0f1; color: #2c3e50;
+        padding: 9px 22px; margin-right: 3px;
+        border-top-left-radius: 6px; border-top-right-radius: 6px;
+        font-weight: 600;
+    }
+    QTabBar::tab:selected { background: #3498db; color: white; }
+    QTabBar::tab:hover:!selected { background: #dfe4e6; }
+    QStatusBar { background: #ffffff; color: #2c3e50;
+        border-top: 1px solid #e1e8ed; }
 """
 
 QSS_DARK = """
@@ -964,11 +1081,11 @@ QSS_DARK = """
     QPushButton#dangerButton:hover { background: #c0392b; }
     QPushButton#dangerButton:pressed { background: #a93226; }
     QPushButton#dangerButton:disabled { background: #5a3a3a; color: #a08080; }
-    QLineEdit {
+    QLineEdit, QSpinBox {
         background: #252540; border: 1px solid #353555; border-radius: 6px;
         padding: 6px 10px; color: #e8e8f0; selection-background-color: #4a9eff;
     }
-    QLineEdit:focus { border: 1px solid #4a9eff; }
+    QLineEdit:focus, QSpinBox:focus { border: 1px solid #4a9eff; }
     QRadioButton { color: #e8e8f0; spacing: 10px; }
     QRadioButton::indicator {
         width: 16px; height: 16px; border: 2px solid #555570;
@@ -1012,6 +1129,20 @@ QSS_DARK = """
         background: #353555; padding: 12px 16px; border-radius: 8px;
     }
     QLabel#hintLabel { color: #9aa3b2; }
+    QTabWidget::pane {
+        border: 1px solid #353555; border-radius: 8px;
+        background: #252540; top: -1px;
+    }
+    QTabBar::tab {
+        background: #353555; color: #e8e8f0;
+        padding: 9px 22px; margin-right: 3px;
+        border-top-left-radius: 6px; border-top-right-radius: 6px;
+        font-weight: 600;
+    }
+    QTabBar::tab:selected { background: #4a9eff; color: white; }
+    QTabBar::tab:hover:!selected { background: #404060; }
+    QStatusBar { background: #252540; color: #e8e8f0;
+        border-top: 1px solid #353555; }
 """
 
 
@@ -1019,9 +1150,6 @@ QSS_DARK = """
 # Centered Dialog base
 # ---------------------------------------------------------------------------
 class CenteredDialog(QDialog):
-    """QDialog that automatically centers itself on its parent (or the
-    screen under the mouse cursor) when shown."""
-
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self._center_on_parent)
@@ -1241,9 +1369,7 @@ class SetupWizard(CenteredDialog):
         t.setStyleSheet("font-size: 16px; font-weight: bold;")
         v.addWidget(t)
 
-        hint = QLabel(
-            "Pick your faction. Prices and category folders depend on this."
-        )
+        hint = QLabel("Pick your faction. Prices and category folders depend on this.")
         hint.setWordWrap(True)
         hint.setObjectName("hintLabel")
         v.addWidget(hint)
@@ -2173,6 +2299,7 @@ class MainWindow(QMainWindow):
         self.report_page = self._create_report_page()
         self.stats_page = self._create_stats_page()
         self.fine_calc_page = self._create_fine_calc_page()
+        self.sub_leaders_page = self._create_sub_leaders_page()
         self.settings_page = self._create_settings_page()
 
         self.stack.addWidget(self.home_page)
@@ -2180,12 +2307,15 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.report_page)
         self.stack.addWidget(self.stats_page)
         self.stack.addWidget(self.fine_calc_page)
+        self.stack.addWidget(self.sub_leaders_page)
         self.stack.addWidget(self.settings_page)
 
         self._build_menu()
         self._apply_style()
         self._refresh_labels()
         self._update_theme_button_text()
+
+        self.statusBar().showMessage("Ready", 2000)
 
     # ---------------- Window centering ----------------
     def showEvent(self, event):
@@ -2248,6 +2378,12 @@ class MainWindow(QMainWindow):
         act_clear = QAction("Clear Work Reports", self)
         act_clear.triggered.connect(self.clear_reports)
         tools_menu.addAction(act_clear)
+
+        # Sub-Leaders Panel menu (Police Department only)
+        self.sub_leaders_menu = menubar.addMenu("Sub-Leaders Panel")
+        self.act_open_sub_leaders = QAction("Open Sub-Leaders Panel", self)
+        self.act_open_sub_leaders.triggered.connect(self.open_sub_leaders_panel)
+        self.sub_leaders_menu.addAction(self.act_open_sub_leaders)
 
         settings_menu = menubar.addMenu("Settings")
         act_folder = QAction("Change MTA:SA Folder...", self)
@@ -2374,12 +2510,20 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        container = QWidget()
+        c = QVBoxLayout(container)
+        c.setContentsMargins(0, 0, 0, 0)
+        c.setSpacing(16)
+
         # Card 1 — Calculate
         card1 = QFrame()
         card1.setObjectName("card")
-        c1 = QHBoxLayout(card1)
-        c1.setContentsMargins(22, 22, 22, 22)
-        c1.setSpacing(20)
+        cc1 = QHBoxLayout(card1)
+        cc1.setContentsMargins(22, 22, 22, 22)
+        cc1.setSpacing(20)
         info1 = QVBoxLayout()
         info1.setSpacing(6)
         t1 = QLabel("Calculating the work report")
@@ -2389,20 +2533,20 @@ class MainWindow(QMainWindow):
         self.calc_desc.setObjectName("hintLabel")
         info1.addWidget(t1)
         info1.addWidget(self.calc_desc)
-        c1.addLayout(info1, 1)
+        cc1.addLayout(info1, 1)
         run_btn = QPushButton("Calculate Work Report")
         run_btn.setMinimumHeight(44)
         run_btn.setMinimumWidth(210)
         run_btn.clicked.connect(self.run_report)
-        c1.addWidget(run_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card1)
+        cc1.addWidget(run_btn, 0, Qt.AlignVCenter)
+        c.addWidget(card1)
 
         # Card 2 — Create
         card2 = QFrame()
         card2.setObjectName("card")
-        c2 = QHBoxLayout(card2)
-        c2.setContentsMargins(22, 22, 22, 22)
-        c2.setSpacing(20)
+        cc2 = QHBoxLayout(card2)
+        cc2.setContentsMargins(22, 22, 22, 22)
+        cc2.setSpacing(20)
         info2 = QVBoxLayout()
         info2.setSpacing(6)
         t2 = QLabel("Create Work Report")
@@ -2417,20 +2561,20 @@ class MainWindow(QMainWindow):
         d2.setObjectName("hintLabel")
         info2.addWidget(t2)
         info2.addWidget(d2)
-        c2.addLayout(info2, 1)
+        cc2.addLayout(info2, 1)
         create_btn = QPushButton("Create Work Report")
         create_btn.setMinimumHeight(44)
         create_btn.setMinimumWidth(210)
         create_btn.clicked.connect(self.create_report_folder)
-        c2.addWidget(create_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card2)
+        cc2.addWidget(create_btn, 0, Qt.AlignVCenter)
+        c.addWidget(card2)
 
         # Card 3 — Missing folders
         card3 = QFrame()
         card3.setObjectName("card")
-        c3 = QHBoxLayout(card3)
-        c3.setContentsMargins(22, 22, 22, 22)
-        c3.setSpacing(20)
+        cc3 = QHBoxLayout(card3)
+        cc3.setContentsMargins(22, 22, 22, 22)
+        cc3.setSpacing(20)
         info3 = QVBoxLayout()
         info3.setSpacing(6)
         t3 = QLabel("Create Missing Category Folders")
@@ -2443,13 +2587,13 @@ class MainWindow(QMainWindow):
         d3.setObjectName("hintLabel")
         info3.addWidget(t3)
         info3.addWidget(d3)
-        c3.addLayout(info3, 1)
+        cc3.addLayout(info3, 1)
         folders_btn = QPushButton("Create Folders")
         folders_btn.setMinimumHeight(44)
         folders_btn.setMinimumWidth(210)
         folders_btn.clicked.connect(self.create_category_folders)
-        c3.addWidget(folders_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card3)
+        cc3.addWidget(folders_btn, 0, Qt.AlignVCenter)
+        c.addWidget(card3)
 
         # Card 4 — Fine Calculator (Police Department only)
         self.fine_card = QFrame()
@@ -2478,37 +2622,66 @@ class MainWindow(QMainWindow):
         fine_btn.setMinimumWidth(210)
         fine_btn.clicked.connect(self.open_fine_calculator)
         fc.addWidget(fine_btn, 0, Qt.AlignVCenter)
+        c.addWidget(self.fine_card)
 
-        layout.addWidget(self.fine_card)
+        # Card 5 — Sub-Leaders Panel (Police Department only)
+        self.sub_leaders_card = QFrame()
+        self.sub_leaders_card.setObjectName("card")
+        slc = QHBoxLayout(self.sub_leaders_card)
+        slc.setContentsMargins(22, 22, 22, 22)
+        slc.setSpacing(20)
 
-        # Card 5 — Clear (danger)
-        card5 = QFrame()
-        card5.setObjectName("card")
-        c5 = QHBoxLayout(card5)
-        c5.setContentsMargins(22, 22, 22, 22)
-        c5.setSpacing(20)
-        info5 = QVBoxLayout()
-        info5.setSpacing(6)
-        t5 = QLabel("Clear Work Reports")
-        t5.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
-        d5 = QLabel(
+        sl_info = QVBoxLayout()
+        sl_info.setSpacing(6)
+        sl_title = QLabel("👮  Sub-Leaders Panel")
+        sl_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        sl_desc = QLabel(
+            "Tools for sub-leaders: test flow helpers, FP calculator, "
+            "and work report checker."
+        )
+        sl_desc.setWordWrap(True)
+        sl_desc.setObjectName("hintLabel")
+        sl_info.addWidget(sl_title)
+        sl_info.addWidget(sl_desc)
+        slc.addLayout(sl_info, 1)
+
+        sl_btn = QPushButton("Open Sub-Leaders Panel")
+        sl_btn.setMinimumHeight(44)
+        sl_btn.setMinimumWidth(210)
+        sl_btn.clicked.connect(self.open_sub_leaders_panel)
+        slc.addWidget(sl_btn, 0, Qt.AlignVCenter)
+        c.addWidget(self.sub_leaders_card)
+
+        # Card 6 — Clear (danger)
+        card6 = QFrame()
+        card6.setObjectName("card")
+        cc6 = QHBoxLayout(card6)
+        cc6.setContentsMargins(22, 22, 22, 22)
+        cc6.setSpacing(20)
+        info6 = QVBoxLayout()
+        info6.setSpacing(6)
+        t6 = QLabel("Clear Work Reports")
+        t6.setStyleSheet("font-size: 16px; font-weight: bold; color: #c0392b;")
+        d6 = QLabel(
             "Permanently deletes all files inside the category folders. "
             "Folder structure is preserved. This action cannot be undone."
         )
-        d5.setWordWrap(True)
-        d5.setObjectName("hintLabel")
-        info5.addWidget(t5)
-        info5.addWidget(d5)
-        c5.addLayout(info5, 1)
+        d6.setWordWrap(True)
+        d6.setObjectName("hintLabel")
+        info6.addWidget(t6)
+        info6.addWidget(d6)
+        cc6.addLayout(info6, 1)
         clear_btn = QPushButton("Clear Work Reports")
         clear_btn.setObjectName("dangerButton")
         clear_btn.setMinimumHeight(44)
         clear_btn.setMinimumWidth(210)
         clear_btn.clicked.connect(self.clear_reports)
-        c5.addWidget(clear_btn, 0, Qt.AlignVCenter)
-        layout.addWidget(card5)
+        cc6.addWidget(clear_btn, 0, Qt.AlignVCenter)
+        c.addWidget(card6)
 
-        layout.addStretch()
+        c.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
         return page
 
     def _create_report_page(self) -> QWidget:
@@ -2670,7 +2843,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(30, 24, 30, 30)
         layout.setSpacing(16)
 
-        # Header
         header = QHBoxLayout()
         back = QPushButton("←  Back")
         back.setObjectName("backButton")
@@ -2691,7 +2863,6 @@ class MainWindow(QMainWindow):
         info.setObjectName("hintLabel")
         layout.addWidget(info)
 
-        # Scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -2820,6 +2991,418 @@ class MainWindow(QMainWindow):
         layout.addWidget(scroll, 1)
 
         return page
+
+    # ---------------- Sub-Leaders Panel ----------------
+    def _create_sub_leaders_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(30, 24, 30, 30)
+        layout.setSpacing(14)
+
+        header = QHBoxLayout()
+        back = QPushButton("←  Back")
+        back.setObjectName("backButton")
+        back.clicked.connect(lambda: self.stack.setCurrentWidget(self.tools_page))
+        header.addWidget(back)
+        header.addStretch()
+        layout.addLayout(header)
+
+        title = QLabel("👮  Sub-Leaders Panel")
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        layout.addWidget(title)
+
+        info = QLabel(
+            "Tools for Police Department sub-leaders. "
+            "Available only when your current faction is Police Department."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("hintLabel")
+        layout.addWidget(info)
+
+        self.sub_leaders_tabs = QTabWidget()
+
+        # Tab 1: TEST
+        self.sub_leaders_tabs.addTab(self._create_test_tab(), "TEST")
+
+        # Tab 2: FP Calculator
+        self.sub_leaders_tabs.addTab(self._create_fp_calc_tab(), "FP Calculator")
+
+        # Tab 3: Work Report Checker (placeholder)
+        wr_tab = QWidget()
+        wr_v = QVBoxLayout(wr_tab)
+        wr_v.setContentsMargins(24, 24, 24, 24)
+        wr_placeholder = QLabel("📋  Work Report Checker\n\nComing soon in a future update.")
+        wr_placeholder.setAlignment(Qt.AlignCenter)
+        wr_placeholder.setStyleSheet("font-size: 16px;")
+        wr_v.addWidget(wr_placeholder)
+        self.sub_leaders_tabs.addTab(wr_tab, "Work Report Checker")
+
+        layout.addWidget(self.sub_leaders_tabs, 1)
+        return page
+
+    def _create_test_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(4, 4, 4, 4)
+        cv.setSpacing(14)
+
+        # --- Section 1: Player Name ---
+        name_card = QFrame()
+        name_card.setObjectName("card")
+        ncv = QVBoxLayout(name_card)
+        ncv.setContentsMargins(20, 20, 20, 20)
+        ncv.setSpacing(10)
+
+        name_title = QLabel("Player Name")
+        name_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        ncv.addWidget(name_title)
+
+        name_hint = QLabel(
+            "Enter the player's name exactly as you want it to appear in "
+            "messages. Any characters are accepted."
+        )
+        name_hint.setObjectName("hintLabel")
+        name_hint.setStyleSheet("font-size: 12px;")
+        name_hint.setWordWrap(True)
+        ncv.addWidget(name_hint)
+
+        self.test_player_name_edit = QLineEdit()
+        self.test_player_name_edit.setPlaceholderText("Enter player name...")
+        self.test_player_name_edit.setMinimumHeight(38)
+        self.test_player_name_edit.textChanged.connect(self._on_test_name_changed)
+        ncv.addWidget(self.test_player_name_edit)
+
+        cv.addWidget(name_card)
+
+        # --- Section 2: Test Messages ---
+        msg_card = QFrame()
+        msg_card.setObjectName("card")
+        mcv = QVBoxLayout(msg_card)
+        mcv.setContentsMargins(20, 20, 20, 20)
+        mcv.setSpacing(10)
+
+        msg_title = QLabel("Test Messages")
+        msg_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        mcv.addWidget(msg_title)
+
+        msg_hint = QLabel(
+            "Fill in the player name above first. Then click any button "
+            "to copy the message to your clipboard."
+        )
+        msg_hint.setObjectName("hintLabel")
+        msg_hint.setStyleSheet("font-size: 12px;")
+        msg_hint.setWordWrap(True)
+        mcv.addWidget(msg_hint)
+
+        self.test_start_btn = QPushButton("Copy Start Test Message")
+        self.test_start_btn.setMinimumHeight(42)
+        self.test_start_btn.setEnabled(False)
+        self.test_start_btn.clicked.connect(self._copy_test_start)
+        mcv.addWidget(self.test_start_btn)
+
+        questions_grid = QGridLayout()
+        questions_grid.setSpacing(8)
+
+        self.test_question_btns = []
+        cols = 3
+        for i in range(len(TEST_QUESTIONS)):
+            btn = QPushButton(f"Question {i + 1}")
+            btn.setMinimumHeight(38)
+            btn.setEnabled(False)
+            btn.clicked.connect(lambda checked, idx=i: self._copy_test_question(idx))
+            self.test_question_btns.append(btn)
+            questions_grid.addWidget(btn, i // cols, i % cols)
+
+        mcv.addLayout(questions_grid)
+        cv.addWidget(msg_card)
+
+        # --- Section 3: Accept / Reject ---
+        ar_card = QFrame()
+        ar_card.setObjectName("card")
+        arcv = QVBoxLayout(ar_card)
+        arcv.setContentsMargins(20, 20, 20, 20)
+        arcv.setSpacing(10)
+
+        ar_title = QLabel("Accept / Reject")
+        ar_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        arcv.addWidget(ar_title)
+
+        ar_hint = QLabel(
+            "Select the number of AV questions the player failed, then "
+            "click Accept or Reject. Use Log /d to announce a new member."
+        )
+        ar_hint.setObjectName("hintLabel")
+        ar_hint.setStyleSheet("font-size: 12px;")
+        ar_hint.setWordWrap(True)
+        arcv.addWidget(ar_hint)
+
+        av_row = QHBoxLayout()
+        av_lbl = QLabel("AV Count:")
+        av_lbl.setStyleSheet("font-weight: bold;")
+        av_lbl.setMinimumWidth(90)
+        av_row.addWidget(av_lbl)
+
+        self.test_av_group = QButtonGroup(self)
+        self.test_av_radios: dict[int, QRadioButton] = {}
+        for av in (0, 1, 2):
+            rb = QRadioButton(f"{av}/3")
+            rb.setMinimumHeight(32)
+            rb.setMinimumWidth(70)
+            if av == 0:
+                rb.setChecked(True)
+            self.test_av_group.addButton(rb)
+            self.test_av_radios[av] = rb
+            av_row.addWidget(rb)
+        av_row.addStretch()
+        arcv.addLayout(av_row)
+
+        ar_btns = QHBoxLayout()
+        ar_btns.setSpacing(10)
+
+        self.test_accept_btn = QPushButton("Accept")
+        self.test_accept_btn.setMinimumHeight(42)
+        self.test_accept_btn.setEnabled(False)
+        self.test_accept_btn.clicked.connect(self._copy_test_accept)
+        ar_btns.addWidget(self.test_accept_btn)
+
+        self.test_reject_btn = QPushButton("Reject")
+        self.test_reject_btn.setObjectName("dangerButton")
+        self.test_reject_btn.setMinimumHeight(42)
+        self.test_reject_btn.setEnabled(False)
+        self.test_reject_btn.clicked.connect(self._copy_test_reject)
+        ar_btns.addWidget(self.test_reject_btn)
+
+        self.test_log_btn = QPushButton("Log /d")
+        self.test_log_btn.setObjectName("secondaryButton")
+        self.test_log_btn.setMinimumHeight(42)
+        self.test_log_btn.setEnabled(False)
+        self.test_log_btn.clicked.connect(self._copy_test_log_d)
+        ar_btns.addWidget(self.test_log_btn)
+
+        ar_btns.addStretch()
+        arcv.addLayout(ar_btns)
+        cv.addWidget(ar_card)
+
+        cv.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return tab
+
+    def _create_fp_calc_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(4, 4, 4, 4)
+        cv.setSpacing(14)
+
+        # --- Section 1: Rank ---
+        rank_card = QFrame()
+        rank_card.setObjectName("card")
+        rcv = QVBoxLayout(rank_card)
+        rcv.setContentsMargins(20, 20, 20, 20)
+        rcv.setSpacing(10)
+
+        rank_title = QLabel("1.  Rank")
+        rank_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        rcv.addWidget(rank_title)
+
+        rank_hint = QLabel(
+            "Select the player's rank. Rank 6 uses the main rank (before "
+            "promotion) as the base."
+        )
+        rank_hint.setObjectName("hintLabel")
+        rank_hint.setStyleSheet("font-size: 12px;")
+        rank_hint.setWordWrap(True)
+        rcv.addWidget(rank_hint)
+
+        rank_row = QHBoxLayout()
+        rank_row.setSpacing(10)
+        self.fp_rank_group = QButtonGroup(self)
+        self.fp_rank_radios: dict[int, QRadioButton] = {}
+        for r in (1, 2, 3, 4, 5, 6):
+            rb = QRadioButton(f"Rank {r}")
+            rb.setMinimumHeight(32)
+            if r == 1:
+                rb.setChecked(True)
+            rb.toggled.connect(
+                lambda checked: self._on_fp_rank_changed() if checked else None
+            )
+            self.fp_rank_group.addButton(rb)
+            self.fp_rank_radios[r] = rb
+            rank_row.addWidget(rb)
+        rank_row.addStretch()
+        rcv.addLayout(rank_row)
+
+        # Main rank section (only visible when rank 6 selected)
+        self.fp_main_rank_widget = QWidget()
+        mrv = QVBoxLayout(self.fp_main_rank_widget)
+        mrv.setContentsMargins(0, 6, 0, 0)
+        mrv.setSpacing(6)
+
+        main_lbl = QLabel("Main Rank (before promotion):")
+        main_lbl.setStyleSheet("font-weight: bold; font-size: 12px;")
+        mrv.addWidget(main_lbl)
+
+        main_row = QHBoxLayout()
+        main_row.setSpacing(10)
+        self.fp_main_rank_group = QButtonGroup(self)
+        self.fp_main_rank_radios: dict[int, QRadioButton] = {}
+        for r in (1, 2, 3, 4, 5):
+            rb = QRadioButton(f"Rank {r}")
+            rb.setMinimumHeight(28)
+            if r == 1:
+                rb.setChecked(True)
+            self.fp_main_rank_group.addButton(rb)
+            self.fp_main_rank_radios[r] = rb
+            main_row.addWidget(rb)
+        main_row.addStretch()
+        mrv.addLayout(main_row)
+        self.fp_main_rank_widget.setVisible(False)
+
+        rcv.addWidget(self.fp_main_rank_widget)
+        cv.addWidget(rank_card)
+
+        # --- Section 2: FW Count ---
+        fw_card = QFrame()
+        fw_card.setObjectName("card")
+        fcv = QVBoxLayout(fw_card)
+        fcv.setContentsMargins(20, 20, 20, 20)
+        fcv.setSpacing(10)
+
+        fw_title = QLabel("2.  FW Count")
+        fw_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        fcv.addWidget(fw_title)
+
+        fw_hint = QLabel(
+            "Number of FWs the player has received (each adds +15 FP)."
+        )
+        fw_hint.setObjectName("hintLabel")
+        fw_hint.setStyleSheet("font-size: 12px;")
+        fw_hint.setWordWrap(True)
+        fcv.addWidget(fw_hint)
+
+        fw_row = QHBoxLayout()
+        fw_row.setSpacing(10)
+        self.fp_fw_group = QButtonGroup(self)
+        self.fp_fw_radios: dict[int, QRadioButton] = {}
+        for n in (0, 1, 2, 3, 4):
+            label = f"{n}" if n < 4 else "4+"
+            rb = QRadioButton(label)
+            rb.setMinimumHeight(32)
+            rb.setMinimumWidth(70)
+            if n == 0:
+                rb.setChecked(True)
+            self.fp_fw_group.addButton(rb)
+            self.fp_fw_radios[n] = rb
+            fw_row.addWidget(rb)
+        fw_row.addStretch()
+        fcv.addLayout(fw_row)
+        cv.addWidget(fw_card)
+
+        # --- Section 3: Special conditions ---
+        cond_card = QFrame()
+        cond_card.setObjectName("card")
+        ccv = QVBoxLayout(cond_card)
+        ccv.setContentsMargins(20, 20, 20, 20)
+        ccv.setSpacing(8)
+
+        cond_title = QLabel("3.  Special Conditions")
+        cond_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        ccv.addWidget(cond_title)
+
+        cond_hint = QLabel(
+            "Check any condition that applies. Direct kick conditions "
+            "(80 FP) override the rank-based calculation."
+        )
+        cond_hint.setObjectName("hintLabel")
+        cond_hint.setStyleSheet("font-size: 12px;")
+        cond_hint.setWordWrap(True)
+        ccv.addWidget(cond_hint)
+
+        self.fp_outlaw_cb = QCheckBox("Player is Outlaw / Bad  (direct kick 80 FP)")
+        ccv.addWidget(self.fp_outlaw_cb)
+
+        self.fp_insult_leader_cb = QCheckBox("Insulting the leader  (direct kick 80 FP)")
+        ccv.addWidget(self.fp_insult_leader_cb)
+
+        self.fp_high_insult_cb = QCheckBox("High-level insult in faction chat  (direct kick 80 FP)")
+        ccv.addWidget(self.fp_high_insult_cb)
+
+        self.fp_two_fw_week_cb = QCheckBox("2 separate FWs in the first 7 days  (direct kick 80 FP)")
+        ccv.addWidget(self.fp_two_fw_week_cb)
+
+        self.fp_four_plus_fw_cb = QCheckBox("4 or more total FWs  (automatic kick 80 FP)")
+        ccv.addWidget(self.fp_four_plus_fw_cb)
+
+        self.fp_resign_week_cb = QCheckBox("Resignation in less than 1 week of joining  (60 FP)")
+        ccv.addWidget(self.fp_resign_week_cb)
+
+        cv.addWidget(cond_card)
+
+        # --- Action buttons ---
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+
+        calc_btn = QPushButton("Calculate FP")
+        calc_btn.setMinimumHeight(44)
+        calc_btn.setMinimumWidth(180)
+        calc_btn.clicked.connect(self._on_fp_calculate)
+        action_row.addWidget(calc_btn)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setObjectName("secondaryButton")
+        reset_btn.setMinimumHeight(44)
+        reset_btn.setMinimumWidth(120)
+        reset_btn.clicked.connect(self._on_fp_reset)
+        action_row.addWidget(reset_btn)
+
+        action_row.addStretch()
+        cv.addLayout(action_row)
+
+        # --- Result card ---
+        self.fp_result_card = QFrame()
+        self.fp_result_card.setObjectName("card")
+        self.fp_result_card.setVisible(False)
+        frv = QVBoxLayout(self.fp_result_card)
+        frv.setContentsMargins(22, 20, 22, 20)
+        frv.setSpacing(8)
+
+        self.fp_result_title = QLabel("Result")
+        self.fp_result_title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        frv.addWidget(self.fp_result_title)
+
+        self.fp_result_details = QLabel()
+        self.fp_result_details.setWordWrap(True)
+        self.fp_result_details.setStyleSheet("font-size: 13px;")
+        frv.addWidget(self.fp_result_details)
+
+        self.fp_result_total = QLabel()
+        self.fp_result_total.setStyleSheet(
+            "font-size: 24px; font-weight: bold; padding: 12px 0;"
+        )
+        frv.addWidget(self.fp_result_total)
+
+        cv.addWidget(self.fp_result_card)
+
+        cv.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return tab
 
     def _create_settings_page(self) -> QWidget:
         page = QWidget()
@@ -3174,6 +3757,204 @@ class MainWindow(QMainWindow):
             self.fine_card.setVisible(is_pd)
         if hasattr(self, "act_fine"):
             self.act_fine.setEnabled(is_pd)
+        if hasattr(self, "sub_leaders_card"):
+            self.sub_leaders_card.setVisible(is_pd)
+        if hasattr(self, "sub_leaders_menu"):
+            self.sub_leaders_menu.setEnabled(is_pd)
+
+    # ---------------- Sub-Leaders Panel ----------------
+    def open_sub_leaders_panel(self) -> None:
+        if self.faction != PD_FACTION_NAME:
+            QMessageBox.information(
+                self, "Police Department Only",
+                "The Sub-Leaders Panel is only available for the "
+                "Police Department faction."
+            )
+            return
+        self.stack.setCurrentWidget(self.sub_leaders_page)
+
+    # ---------------- TEST tab logic ----------------
+    def _on_test_name_changed(self, text: str) -> None:
+        has_name = bool(text.strip())
+        if hasattr(self, "test_start_btn"):
+            self.test_start_btn.setEnabled(has_name)
+        if hasattr(self, "test_question_btns"):
+            for btn in self.test_question_btns:
+                btn.setEnabled(has_name)
+        if hasattr(self, "test_accept_btn"):
+            self.test_accept_btn.setEnabled(has_name)
+        if hasattr(self, "test_reject_btn"):
+            self.test_reject_btn.setEnabled(has_name)
+        if hasattr(self, "test_log_btn"):
+            self.test_log_btn.setEnabled(has_name)
+
+    def _get_test_player_name(self) -> str:
+        if not hasattr(self, "test_player_name_edit"):
+            return ""
+        return self.test_player_name_edit.text().strip()
+
+    def _copy_to_clipboard(self, text: str, label: str) -> None:
+        try:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage(f"✅  Copied: {label}", 2500)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Copy Failed",
+                f"Failed to copy to clipboard:\n{exc}"
+            )
+
+    def _copy_test_start(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        text = TEST_START_MESSAGE_TEMPLATE.format(name=name)
+        self._copy_to_clipboard(text, "Start test message")
+
+    def _copy_test_question(self, idx: int) -> None:
+        if idx < 0 or idx >= len(TEST_QUESTIONS):
+            return
+        self._copy_to_clipboard(TEST_QUESTIONS[idx], f"Question {idx + 1}")
+
+    def _get_selected_av(self) -> int:
+        if not hasattr(self, "test_av_radios"):
+            return 0
+        for av, rb in self.test_av_radios.items():
+            if rb.isChecked():
+                return av
+        return 0
+
+    def _copy_test_accept(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        av = self._get_selected_av()
+        text = TEST_ACCEPT_TEMPLATE.format(av=av)
+        self._copy_to_clipboard(text, f"Accept ({av}/3)")
+
+    def _copy_test_reject(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        self._copy_to_clipboard(TEST_REJECT_MESSAGE, "Reject")
+
+    def _copy_test_log_d(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        text = TEST_LOG_D_TEMPLATE.format(name=name)
+        self._copy_to_clipboard(text, "Log /d")
+
+    # ---------------- FP Calculator logic ----------------
+    def _get_selected_fp_rank(self) -> int:
+        if not hasattr(self, "fp_rank_radios"):
+            return 1
+        for r, rb in self.fp_rank_radios.items():
+            if rb.isChecked():
+                return r
+        return 1
+
+    def _get_selected_fp_main_rank(self) -> int | None:
+        if not hasattr(self, "fp_main_rank_radios"):
+            return None
+        for r, rb in self.fp_main_rank_radios.items():
+            if rb.isChecked():
+                return r
+        return 1
+
+    def _get_selected_fp_fw(self) -> int:
+        if not hasattr(self, "fp_fw_radios"):
+            return 0
+        for n, rb in self.fp_fw_radios.items():
+            if rb.isChecked():
+                return n
+        return 0
+
+    def _on_fp_rank_changed(self) -> None:
+        rank = self._get_selected_fp_rank()
+        if hasattr(self, "fp_main_rank_widget"):
+            self.fp_main_rank_widget.setVisible(rank == 6)
+        if hasattr(self, "fp_result_card"):
+            self.fp_result_card.setVisible(False)
+
+    def _on_fp_reset(self) -> None:
+        if hasattr(self, "fp_rank_radios"):
+            self.fp_rank_radios[1].setChecked(True)
+        if hasattr(self, "fp_main_rank_radios"):
+            self.fp_main_rank_radios[1].setChecked(True)
+        if hasattr(self, "fp_fw_radios"):
+            self.fp_fw_radios[0].setChecked(True)
+        for cb_name in (
+            "fp_outlaw_cb", "fp_insult_leader_cb", "fp_high_insult_cb",
+            "fp_two_fw_week_cb", "fp_four_plus_fw_cb", "fp_resign_week_cb",
+        ):
+            if hasattr(self, cb_name):
+                getattr(self, cb_name).setChecked(False)
+        if hasattr(self, "fp_result_card"):
+            self.fp_result_card.setVisible(False)
+
+    def _on_fp_calculate(self) -> None:
+        rank = self._get_selected_fp_rank()
+        main_rank = self._get_selected_fp_main_rank() if rank == 6 else None
+        fw_count = self._get_selected_fp_fw()
+
+        is_outlaw = self.fp_outlaw_cb.isChecked() if hasattr(self, "fp_outlaw_cb") else False
+        insult_leader = self.fp_insult_leader_cb.isChecked() if hasattr(self, "fp_insult_leader_cb") else False
+        high_insult = self.fp_high_insult_cb.isChecked() if hasattr(self, "fp_high_insult_cb") else False
+        two_fw_first_week = self.fp_two_fw_week_cb.isChecked() if hasattr(self, "fp_two_fw_week_cb") else False
+        four_plus_fw = self.fp_four_plus_fw_cb.isChecked() if hasattr(self, "fp_four_plus_fw_cb") else False
+        resign_first_week = self.fp_resign_week_cb.isChecked() if hasattr(self, "fp_resign_week_cb") else False
+
+        # Auto-set four_plus_fw based on the FW count (4+)
+        if fw_count >= 4:
+            four_plus_fw = True
+
+        total, lines, override = calculate_fp(
+            rank=rank,
+            main_rank=main_rank,
+            fw_count=fw_count if fw_count < 4 else fw_count,
+            is_outlaw=is_outlaw,
+            insult_leader=insult_leader,
+            high_insult=high_insult,
+            two_fw_first_week=two_fw_first_week,
+            four_plus_fw=four_plus_fw,
+            resign_first_week=resign_first_week,
+        )
+
+        # Header
+        if rank == 6 and main_rank is not None:
+            self.fp_result_title.setText(
+                f"Result — Rank 6 (main Rank {main_rank})"
+            )
+        else:
+            self.fp_result_title.setText(f"Result — Rank {rank}")
+
+        # Details
+        details_lines = list(lines)
+        if override:
+            details_lines.append(f"<b>{override}</b>")
+        self.fp_result_details.setText("<br>".join(details_lines))
+
+        # Total
+        if override == "Direct kick (80 FP)":
+            self.fp_result_total.setText(f"🚫  Total FP:  {total}")
+            self.fp_result_total.setStyleSheet(
+                "font-size: 24px; font-weight: bold; padding: 12px 0;"
+                "color: #e74c3c;"
+            )
+        elif override == "Early resignation":
+            self.fp_result_total.setText(f"⚠️  Total FP:  {total}")
+            self.fp_result_total.setStyleSheet(
+                "font-size: 24px; font-weight: bold; padding: 12px 0;"
+                "color: #e67e22;"
+            )
+        else:
+            self.fp_result_total.setText(f"📊  Total FP:  {total}")
+            self.fp_result_total.setStyleSheet(
+                "font-size: 24px; font-weight: bold; padding: 12px 0;"
+                "color: #3498db;"
+            )
+
+        self.fp_result_card.setVisible(True)
 
     # ---------------- Stats Dashboard ----------------
     def open_stats(self) -> None:
@@ -3777,6 +4558,8 @@ class MainWindow(QMainWindow):
             "• Creates a zipped work report on the Desktop with a preview "
             "and disk-space check before starting.<br>"
             "• 🚔 Fine Calculator for Police Department (speed violations).<br>"
+            "• 👮 Sub-Leaders Panel for Police Department "
+            "(TEST tools, FP calculator, report checker).<br>"
             "• Faction Stats Dashboard with visual category breakdown.<br>"
             "• Progress dialog with live ETA.<br>"
             "• Exports reports to CSV or PDF.<br>"
