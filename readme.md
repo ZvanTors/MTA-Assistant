@@ -7,13 +7,13 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.10.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.13.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
 </p>
 
-<p><strong>Calculate work reports · Compress screenshots · Manage factions — all in one place.</strong></p>
+<p><strong>Calculate work reports · Compress screenshots · Manage factions · Sub-Leaders tools — all in one place.</strong></p>
 
 </div>
 
@@ -54,7 +54,7 @@
 <p>Choose how aggressively screenshots get compressed in <strong>Settings</strong>: <strong>250 KB</strong> (default), <strong>200 KB</strong>, or <strong>150 KB</strong> per image. Your choice is remembered forever.</p>
 
 <h3>📁 Create Missing Category Folders</h3>
-<p>A new tool to <strong>auto-create any missing category folders</strong> for your current faction. Existing folders are never touched.</p>
+<p>A tool to <strong>auto-create any missing category folders</strong> for your current faction. Existing folders are never touched.</p>
 
 <h3>🔄 Auto-Update</h3>
 <p>Checks for updates automatically every time you launch. If a newer version is available, a clean dialog lets you download it with one click — or skip that specific version. Manual check is also available from <strong>Help → Check for Updates...</strong></p>
@@ -63,7 +63,7 @@
 <p>Automatically counts your screenshots across all category folders and calculates your total earnings per category — with <strong>faction-specific pricing</strong> applied instantly.</p>
 
 <h3>📦 One-Click Work Report Creation</h3>
-<p>Converts every PNG screenshot to a compressed JPG, packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar</strong> so the app never freezes.</p>
+<p>Converts every PNG screenshot to a compressed JPG, packs them into a clean folder structure on your Desktop, and automatically zips everything — with a <strong>live progress bar and ETA</strong> so the app never freezes.</p>
 
 <h3>📤 Export Reports to CSV &amp; PDF</h3>
 <p>Save your work report as a shareable file — no more screenshots of the table. Export directly to:</p>
@@ -71,6 +71,43 @@
   <li><strong>CSV</strong> — opens in Excel / Google Sheets with proper encoding</li>
   <li><strong>PDF</strong> — professional layout ready to send to your faction admin</li>
 </ul>
+
+<h3>👮 Sub-Leaders Panel <em>(for every faction)</em></h3>
+<p>A dedicated panel available for <strong>all factions</strong> with two tabs:</p>
+<ul>
+  <li>
+    <strong>TEST</strong> — paste a player's name and get one-click copy buttons for
+    every test question, plus <strong>Accept / Reject / Log&nbsp;/d</strong> message helpers with
+    AV count selection.
+    <br>
+    👉 The question list is <strong>fully editable</strong>: add, edit, or delete questions
+    per faction. Each question gets its own <strong>Copy / Edit / Delete</strong> row.
+    Changes are saved automatically in <code>%APPDATA%\MTA Assistant\test_questions.json</code>
+    and remembered per faction.
+  </li>
+  <li>
+    <strong>FP Calculator</strong> — automatically computes a player's FP based on rank,
+    FW count, and special conditions (Outlaw, insulting the leader, 2 FWs in the first week,
+    4+ total FWs, early resignation). Direct-kick cases override the rank-based calculation.
+  </li>
+</ul>
+
+<h3>🚔 Fine Calculator <em>(Police Department only)</em></h3>
+<p>Enter a driver's speed and choose a location (LS City, LV City, SF City, Heavy Traffic, Highway) to instantly compute the fine:</p>
+<p align="center"><code>$5,000 base + $2,000 per 20 KM/H over the limit</code></p>
+
+<h3>📊 Faction Stats Dashboard</h3>
+<p>A visual dashboard with:</p>
+<ul>
+  <li>Total screenshots count</li>
+  <li>Total amount earned</li>
+  <li>Number of active categories</li>
+  <li>Top category by count</li>
+  <li>Color-coded bar chart breakdown per category</li>
+</ul>
+
+<h3>🔒 Offline License System</h3>
+<p>15-day free trial with <strong>Ed25519 offline license verification</strong>. Once activated, license information and remaining days are always visible in the status bar and the Home / Settings pages — no internet needed. Tamper detection (clock rollback, HWID mismatch) protects against trivial bypasses.</p>
 
 <h3>🌙 Dark Mode</h3>
 <p>Switch between <strong>Light</strong> and <strong>Dark</strong> themes with a single click. Your choice is saved in the Windows registry and applied instantly.</p>
@@ -99,7 +136,7 @@
 <p>Folder names no longer need to match exactly. Whether your folders are named <code>arrest</code>, <code>ARREST</code>, or <code>Arrest</code> — the app treats them all the same. Same goes for <code>Slot-Gun</code>, <code>towcar</code>, and every other category.</p>
 
 <h3>💾 Registry Persistence</h3>
-<p>Your MTA:SA folder, faction, rank, in-game name, theme, and compression level are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
+<p>Your MTA:SA folder, faction, rank, in-game name, theme, compression level, license key, and trial status are saved in the Windows registry. <strong>No setup needed on subsequent launches.</strong></p>
 
 <h3>🧹 Clear Work Reports</h3>
 <p>Clean out all screenshot folders in one click — with a confirmation dialog for safety.</p>
@@ -125,7 +162,7 @@
   <li><strong>Download</strong> <code>MTA Assistant.exe</code> from the Releases page.</li>
   <li><strong>Run</strong> it (UAC prompt will appear — click Yes).</li>
   <li>The <strong>Setup Wizard</strong> appears on first launch — follow the 4 steps.</li>
-  <li>You're ready. Click <strong>Tools</strong> to calculate a work report, create a new one, or export it.</li>
+  <li>You're ready. Click <strong>Tools</strong> to calculate a work report, create a new one, use the Sub-Leaders Panel, or export it.</li>
 </ol>
 
 <hr>
@@ -139,7 +176,7 @@
 </ul>
 
 <h3>Install dependencies</h3>
-<pre><code>pip install PySide6 Pillow pyinstaller</code></pre>
+<pre><code>pip install PySide6 Pillow cryptography pyinstaller</code></pre>
 
 <h3>Run the app</h3>
 <pre><code>python mta_assistant.py</code></pre>
@@ -148,6 +185,30 @@
 <pre><code>pyinstaller --onefile --noconsole --uac-admin --icon "logo.ico" --add-data "logo.ico;." --name "MTA Assistant" mta_assistant.py</code></pre>
 
 <p>The finished exe will be in <code>dist/MTA Assistant.exe</code>.</p>
+
+<hr>
+
+<h2>🔑 License System</h2>
+
+<p>MTA Assistant uses a <strong>fully offline</strong> license system based on <strong>Ed25519 signatures</strong>. Every install starts with a <strong>15-day free trial</strong>.</p>
+
+<h3>How it works</h3>
+<ol>
+  <li>On first launch, the app generates a unique <strong>HWID</strong> (Hardware ID) from your machine's <code>MachineGuid</code>, CPU ID, and motherboard serial number.</li>
+  <li>When the trial ends, an <strong>Activation dialog</strong> appears showing your HWID.</li>
+  <li>Send your HWID to the seller on Telegram to receive a signed license key.</li>
+  <li>Paste the license key — it's verified <strong>locally</strong> without any internet call.</li>
+</ol>
+
+<h3>Trial protection</h3>
+<ul>
+  <li>Clock rollback detection (last seen date + max seen date)</li>
+  <li>HWID binding — a license only works on the machine it was issued for</li>
+  <li>Tamper flag — once triggered, the trial is permanently disabled</li>
+</ul>
+
+<h3>Status display</h3>
+<p>The remaining trial or license duration is always visible in the <strong>status bar</strong>, on the <strong>Home page</strong>, and in <strong>Settings</strong>. It refreshes every hour automatically.</p>
 
 <hr>
 
@@ -162,6 +223,19 @@
     ├── Wanted/
     └── ...</code></pre>
 <p>Folder names are matched <strong>case-insensitively</strong> (<code>arrest</code> = <code>ARREST</code> = <code>Arrest</code>). Missing folders are handled gracefully — no errors. You can also auto-create missing folders via <strong>Tools → Create Missing Category Folders</strong>.</p>
+
+<hr>
+
+<h2>💾 Data Storage Locations</h2>
+
+<table>
+  <thead><tr><th>Data</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>MTA folder, faction, rank, name, theme, compression, license, trial info</td><td><code>HKEY_CURRENT_USER\Software\MTA Assistant</code></td></tr>
+    <tr><td>Per-faction test questions</td><td><code>%APPDATA%\MTA Assistant\test_questions.json</code></td></tr>
+    <tr><td>Work report output</td><td><code>%USERPROFILE%\Desktop\&lt;GameName&gt;\</code> + <code>&lt;GameName&gt;.zip</code></td></tr>
+  </tbody>
+</table>
 
 <hr>
 
@@ -293,12 +367,84 @@
 
 <hr>
 
+<h2>🚔 Fine Calculator</h2>
+
+<p>Available only when your current faction is <strong>Police Department</strong>.</p>
+
+<table>
+  <thead><tr><th>Location</th><th>Speed Limit</th></tr></thead>
+  <tbody>
+    <tr><td>LS City</td><td>120 KM/H</td></tr>
+    <tr><td>LV City</td><td>170 KM/H</td></tr>
+    <tr><td>SF City</td><td>180 KM/H</td></tr>
+    <tr><td>Heavy Traffic Areas</td><td>100 KM/H</td></tr>
+    <tr><td>Highway / Outside Cities</td><td>240 KM/H</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Formula:</strong> <code>Total = $5,000 + (⌊(Speed − Limit) / 20⌋ × $2,000)</code></p>
+
+<hr>
+
+<h2>👮 Sub-Leaders Panel — FP Calculator</h2>
+
+<p>Available for <strong>every faction</strong>. The FP Calculator uses the following rules:</p>
+
+<h3>Base FP by Rank</h3>
+<table>
+  <thead><tr><th>Rank</th><th>Base FP</th></tr></thead>
+  <tbody>
+    <tr><td>Rank 1</td><td>30</td></tr>
+    <tr><td>Rank 2</td><td>20</td></tr>
+    <tr><td>Rank 3</td><td>15</td></tr>
+    <tr><td>Rank 4</td><td>10</td></tr>
+    <tr><td>Rank 5</td><td>5</td></tr>
+    <tr><td>Rank 6</td><td>Uses main rank as base</td></tr>
+  </tbody>
+</table>
+
+<h3>Modifiers</h3>
+<ul>
+  <li><strong>+15 FP</strong> per FW received</li>
+  <li><strong>60 FP</strong> — Resignation in less than 1 week of joining</li>
+  <li><strong>80 FP — Direct Kick</strong> — Outlaw / Bad, insulting the leader, high-level insult, 2 FWs in first 7 days, or 4+ total FWs</li>
+</ul>
+
+<hr>
+
 <h2>🖥️ Screenshots</h2>
-<blockquote><em>Add screenshots of the Home page, Tools, and Report table here.</em></blockquote>
+<blockquote><em>Add screenshots of the Home page, Tools, Sub-Leaders Panel, Fine Calculator, and Report table here.</em></blockquote>
 
 <hr>
 
 <h2>📋 Changelog</h2>
+
+<h3>v1.13.0</h3>
+<ul>
+  <li>👮 <strong>Sub-Leaders Panel for every faction</strong> — no longer limited to Police Department</li>
+  <li>📝 <strong>Fully editable TEST question list</strong> — add, edit, and delete questions per faction. Each question gets its own <strong>Copy / Edit / Delete</strong> row. Saved in <code>%APPDATA%\MTA Assistant\test_questions.json</code></li>
+  <li>🌱 Default sample question is now available for every faction that hasn't been customised yet</li>
+  <li>🧹 Removed the "Work Report Checker" placeholder tab from the Sub-Leaders Panel</li>
+  <li>🎨 Question rows use clean text buttons (Copy / Edit / Delete) instead of icons</li>
+</ul>
+
+<h3>v1.12.0</h3>
+<ul>
+  <li>🔒 <strong>Offline license system</strong> — Ed25519 signature verification, HWID-bound, no internet required</li>
+  <li>🕐 <strong>15-day free trial</strong> with clock-rollback and tamper detection</li>
+  <li>📊 <strong>License / Trial status display</strong> in the status bar, Home page, and Settings — refreshes hourly</li>
+  <li>🔑 <strong>License Activation dialog</strong> with HWID copy button and seller Telegram contact</li>
+  <li>🎯 <strong>Faction Stats Dashboard</strong> — visual bar-chart breakdown per category</li>
+  <li>🚔 <strong>Fine Calculator</strong> for Police Department (speed violations)</li>
+  <li>👮 <strong>Sub-Leaders Panel</strong> for Police Department (TEST + FP Calculator)</li>
+</ul>
+
+<h3>v1.11.0</h3>
+<ul>
+  <li>🎚️ <strong>Compression level</strong> selector remembers your choice</li>
+  <li>📈 Progress dialog now shows live <strong>ETA</strong> during conversion</li>
+  <li>🧹 Improved error messages and empty-state handling</li>
+</ul>
 
 <h3>v1.10.0</h3>
 <ul>
@@ -387,9 +533,10 @@
   <tbody>
     <tr><td>GUI</td><td>PySide6 (Qt 6)</td></tr>
     <tr><td>Image Processing</td><td>Pillow</td></tr>
+    <tr><td>License Verification</td><td>cryptography (Ed25519)</td></tr>
     <tr><td>PDF Export</td><td>Qt QPrinter (built-in)</td></tr>
     <tr><td>Auto-Update</td><td>GitHub Releases API (urllib)</td></tr>
-    <tr><td>Persistence</td><td>Windows Registry (winreg)</td></tr>
+    <tr><td>Persistence</td><td>Windows Registry (winreg) + JSON</td></tr>
     <tr><td>Packaging</td><td>PyInstaller</td></tr>
     <tr><td>Language</td><td>Python 3.10+</td></tr>
   </tbody>
