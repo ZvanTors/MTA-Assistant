@@ -3354,8 +3354,8 @@ class MainWindow(QMainWindow):
         sl_title = QLabel("👮  Sub-Leaders Panel")
         sl_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         sl_desc = QLabel(
-            "Tools for sub-leaders: editable test questions with copy buttons "
-            "and an FP calculator."
+            "Tools for sub-leaders. Police Department gets editable test "
+            "questions with copy buttons; every faction gets the FP calculator."
         )
         sl_desc.setWordWrap(True)
         sl_desc.setObjectName("hintLabel")
@@ -3725,21 +3725,36 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
-        self.sub_leaders_info = QLabel(
-            f"Tools for {self.faction} sub-leaders: "
-            "editable test questions with copy buttons and an FP calculator."
-        )
+        self.sub_leaders_info = QLabel()
         self.sub_leaders_info.setWordWrap(True)
         self.sub_leaders_info.setObjectName("hintLabel")
         layout.addWidget(self.sub_leaders_info)
 
         self.sub_leaders_tabs = QTabWidget()
 
-        self.sub_leaders_tabs.addTab(self._create_test_tab(), "TEST")
+        # TEST tab is only shown for Police Department.
+        if self.faction == PD_FACTION_NAME:
+            self.sub_leaders_tabs.addTab(self._create_test_tab(), "TEST")
+
         self.sub_leaders_tabs.addTab(self._create_fp_calc_tab(), "FP Calculator")
 
         layout.addWidget(self.sub_leaders_tabs, 1)
+        self._update_sub_leaders_info_text()
         return page
+
+    def _update_sub_leaders_info_text(self) -> None:
+        if not hasattr(self, "sub_leaders_info"):
+            return
+        if self.faction == PD_FACTION_NAME:
+            self.sub_leaders_info.setText(
+                f"Tools for {self.faction} sub-leaders: "
+                "editable test questions with copy buttons and an FP calculator."
+            )
+        else:
+            self.sub_leaders_info.setText(
+                f"Tools for {self.faction} sub-leaders: "
+                "an FP calculator based on rank, FW count, and special conditions."
+            )
 
     def _create_test_tab(self) -> QWidget:
         tab = QWidget()
@@ -3755,7 +3770,7 @@ class MainWindow(QMainWindow):
         cv.setContentsMargins(4, 4, 4, 4)
         cv.setSpacing(14)
 
-        # ── Section 1: Player Name ──────────────────────────────
+        # ── Section 1: Player Name + Start Test Message ─────────
         name_card = QFrame()
         name_card.setObjectName("card")
         ncv = QVBoxLayout(name_card)
@@ -3780,6 +3795,13 @@ class MainWindow(QMainWindow):
         self.test_player_name_edit.setMinimumHeight(38)
         self.test_player_name_edit.textChanged.connect(self._on_test_name_changed)
         ncv.addWidget(self.test_player_name_edit)
+
+        # NEW — Copy Start Test Message button
+        self.test_start_btn = QPushButton("Copy Start Test Message")
+        self.test_start_btn.setMinimumHeight(42)
+        self.test_start_btn.setEnabled(False)
+        self.test_start_btn.clicked.connect(self._copy_test_start)
+        ncv.addWidget(self.test_start_btn)
 
         cv.addWidget(name_card)
 
@@ -4397,11 +4419,7 @@ class MainWindow(QMainWindow):
         theme_display = "Dark" if self.theme == "dark" else "Light"
         self.settings_theme_label.setText(f"Current theme: {theme_display}")
 
-        if hasattr(self, "sub_leaders_info"):
-            self.sub_leaders_info.setText(
-                f"Tools for {self.faction} sub-leaders: "
-                "editable test questions with copy buttons and an FP calculator."
-            )
+        self._update_sub_leaders_info_text()
 
         if coming_soon:
             folder_names = [name for name, _ in COMING_SOON_FACTIONS[self.faction]]
@@ -5387,6 +5405,9 @@ class MainWindow(QMainWindow):
         self._refresh_labels()
         QMessageBox.information(self, "Saved", f"Faction changed to {self.faction}.")
 
+        # Suggest re-opening the Sub-Leaders panel so tab layout refreshes
+        # for the new faction (TEST tab is only shown for Police Department).
+
     def change_rank(self) -> None:
         if not faction_requires_rank(self.faction):
             QMessageBox.information(
@@ -5437,9 +5458,9 @@ class MainWindow(QMainWindow):
             "• Creates a zipped work report on the Desktop with a preview "
             "and disk-space check before starting.<br>"
             "• 🚔 Fine Calculator for Police Department (speed violations).<br>"
-            "• 👮 Sub-Leaders Panel available for ALL factions with an "
-            "editable question list (add / edit / delete questions per faction, "
-            "each with its own Copy button) and an FP calculator.<br>"
+            "• 👮 Sub-Leaders Panel — TEST tab (editable questions, Copy Start "
+            "Test Message, Accept / Reject / Log d) available only for Police "
+            "Department; FP Calculator available for every faction.<br>"
             "• Faction Stats Dashboard with visual category breakdown.<br>"
             "• Progress dialog with live ETA.<br>"
             "• Exports reports to CSV or PDF.<br>"
