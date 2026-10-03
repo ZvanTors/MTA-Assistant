@@ -7,7 +7,7 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.14.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.15.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
@@ -56,8 +56,16 @@
 <h3>📁 Create Missing Category Folders</h3>
 <p>A tool to <strong>auto-create any missing category folders</strong> for your current faction. Existing folders are never touched.</p>
 
-<h3>🔄 Auto-Update</h3>
-<p>Checks for updates automatically every time you launch. If a newer version is available, a clean dialog lets you download it with one click — or skip that specific version. Manual check is also available from <strong>Help → Check for Updates...</strong></p>
+<h3>🚀 In-App Auto-Update</h3>
+<p>Checks for updates automatically every time you launch. When a newer version is available, you get a clean dialog — and if you accept, the update is downloaded <strong>inside the app</strong> with a live progress window showing the total size, downloaded amount, and download speed. Once finished, the app <strong>closes, replaces itself, and restarts automatically</strong> with the new version. No more manual downloading or browser redirects.</p>
+<ul>
+  <li><strong>Live progress bar</strong> — percentage, MB/MB, and MB/s speed</li>
+  <li><strong>Cancel button</strong> — abort a download mid-way if needed</li>
+  <li><strong>Self-replacement</strong> — no more "download, then replace the exe manually"</li>
+  <li><strong>Skip this version</strong> — stored in the registry, remembered forever</li>
+  <li><strong>Manual check</strong> also available from <strong>Help → Check for Updates...</strong></li>
+  <li>Falls back to opening the browser if the app is running from source code</li>
+</ul>
 
 <h3>📊 Work Report Calculator</h3>
 <p>Automatically counts your screenshots across all category folders and calculates your total earnings per category — with <strong>faction-specific pricing</strong> applied instantly.</p>
@@ -185,6 +193,7 @@
   <li><strong>Run</strong> it (UAC prompt will appear — click Yes).</li>
   <li>The <strong>Setup Wizard</strong> appears on first launch — follow the 4 steps.</li>
   <li>You're ready. Click <strong>Tools</strong> to calculate a work report, create a new one, use the Sub-Leaders Panel, or export it.</li>
+  <li>When a new version is released, the app will <strong>update itself automatically</strong> — just click <strong>Download &amp; Install</strong>.</li>
 </ol>
 
 <hr>
@@ -207,6 +216,10 @@
 <pre><code>pyinstaller --onefile --noconsole --uac-admin --icon "logo.ico" --add-data "logo.ico;." --name "MTA Assistant" mta_assistant.py</code></pre>
 
 <p>The finished exe will be in <code>dist/MTA Assistant.exe</code>.</p>
+
+<blockquote>
+  <p>ℹ️ <strong>Note on the in-app updater:</strong> Self-replacement only works when the app is running as a frozen <code>.exe</code>. If you launch the app from Python source, the updater will fall back to opening the download page in your browser instead.</p>
+</blockquote>
 
 <hr>
 
@@ -256,6 +269,7 @@
     <tr><td>MTA folder, faction, rank, name, theme, compression, license, trial info</td><td><code>HKEY_CURRENT_USER\Software\MTA Assistant</code></td></tr>
     <tr><td>Per-faction test questions</td><td><code>%APPDATA%\MTA Assistant\test_questions.json</code></td></tr>
     <tr><td>Work report output</td><td><code>%USERPROFILE%\Desktop\&lt;GameName&gt;\</code> + <code>&lt;GameName&gt;.zip</code></td></tr>
+    <tr><td>Temporary update files (during self-update)</td><td><code>&lt;install-dir&gt;\_mta_assistant_new.exe</code> and <code>&lt;install-dir&gt;\_mta_assistant_update.bat</code></td></tr>
   </tbody>
 </table>
 
@@ -434,12 +448,54 @@
 
 <hr>
 
+<h2>🚀 How the In-App Update Works</h2>
+
+<p>Starting from v1.15.0, MTA Assistant updates itself without leaving the app:</p>
+
+<ol>
+  <li>The app checks GitHub Releases for a newer tag on launch (or when you click <strong>Help → Check for Updates...</strong>).</li>
+  <li>If a newer version is available, an <strong>Update dialog</strong> appears with the current and latest versions.</li>
+  <li>Click <strong>Download &amp; Install</strong>. A new <strong>Download dialog</strong> opens with:
+    <ul>
+      <li>Live percentage progress bar</li>
+      <li>Total file size and downloaded size (e.g. <code>42.3 MB / 87.1 MB</code>)</li>
+      <li>Real-time download speed (e.g. <code>3.45 MB/s</code>)</li>
+      <li>A <strong>Cancel</strong> button to abort the download mid-way</li>
+    </ul>
+  </li>
+  <li>When the download finishes, the app silently:
+    <ul>
+      <li>Saves the new binary next to the current one</li>
+      <li>Launches a small <code>.bat</code> script in a detached process</li>
+      <li>Closes itself immediately</li>
+    </ul>
+  </li>
+  <li>The script waits for the app to fully exit, replaces the old exe with the new one, launches it, and deletes itself.</li>
+  <li>The new version starts automatically with all your settings preserved (they live in the registry, not the exe).</li>
+</ol>
+
+<blockquote>
+  <p>ℹ️ <strong>Running from source?</strong> If you launch MTA Assistant as <code>python mta_assistant.py</code> instead of a packaged <code>.exe</code>, the app cannot replace itself while running. In that case, it will open the GitHub release page in your browser instead.</p>
+</blockquote>
+
+<hr>
+
 <h2>🖥️ Screenshots</h2>
-<blockquote><em>Add screenshots of the Home page, Tools, Sub-Leaders Panel, Fine Calculator, and Report table here.</em></blockquote>
+<blockquote><em>Add screenshots of the Home page, Tools, Sub-Leaders Panel, Fine Calculator, Report table, and the new Download dialog here.</em></blockquote>
 
 <hr>
 
 <h2>📋 Changelog</h2>
+
+<h3>v1.15.0</h3>
+<ul>
+  <li>🚀 <strong>In-App Auto-Update</strong> — updates are now downloaded inside the app with a dedicated progress window</li>
+  <li>📊 <strong>Download dialog</strong> shows percentage, total size, downloaded size, and live download speed</li>
+  <li>🛑 <strong>Cancel button</strong> to abort a download in progress</li>
+  <li>🔄 <strong>Self-replacement</strong> — after the download finishes, the app closes, replaces itself, and restarts automatically with the new version</li>
+  <li>🌐 <strong>Browser fallback</strong> — if the app is running from source code, it opens the release page in the browser instead of trying to replace itself</li>
+  <li>🎯 Update dialog's button renamed to <strong>"Download &amp; Install"</strong> to reflect the new behaviour</li>
+</ul>
 
 <h3>v1.14.0</h3>
 <ul>
@@ -569,6 +625,7 @@
     <tr><td>License Verification</td><td>cryptography (Ed25519)</td></tr>
     <tr><td>PDF Export</td><td>Qt QPrinter (built-in)</td></tr>
     <tr><td>Auto-Update</td><td>GitHub Releases API (urllib)</td></tr>
+    <tr><td>Self-Replacement</td><td>Detached <code>cmd.exe</code> + batch script</td></tr>
     <tr><td>Persistence</td><td>Windows Registry (winreg) + JSON</td></tr>
     <tr><td>Packaging</td><td>PyInstaller</td></tr>
     <tr><td>Language</td><td>Python 3.10+</td></tr>
