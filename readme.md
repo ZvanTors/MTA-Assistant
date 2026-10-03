@@ -7,7 +7,7 @@
 <p><strong>A powerful Windows utility for MTA:SA players — built with PySide6.</strong></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.13.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.14.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/made%20by-AmooReza-e74c3c?style=for-the-badge" alt="Made By" />
@@ -73,24 +73,46 @@
 </ul>
 
 <h3>👮 Sub-Leaders Panel <em>(for every faction)</em></h3>
-<p>A dedicated panel available for <strong>all factions</strong> with two tabs:</p>
+<p>A dedicated panel available for <strong>all factions</strong> with two tabs — <strong>TEST</strong> and <strong>FP Calculator</strong>. The sections inside the TEST tab adapt to your current faction automatically:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th align="left">Section</th>
+      <th align="center">Police Department</th>
+      <th align="center">Other Factions</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Player Name + <strong>Copy Start Test Message</strong></td>
+      <td align="center">✅</td>
+      <td align="center">❌</td>
+    </tr>
+    <tr>
+      <td><strong>Editable Question List</strong> (Copy / Edit / Delete)</td>
+      <td align="center">✅</td>
+      <td align="center">✅</td>
+    </tr>
+    <tr>
+      <td><strong>Accept / Reject / Log&nbsp;/d</strong> with AV Count</td>
+      <td align="center">✅</td>
+      <td align="center">❌</td>
+    </tr>
+  </tbody>
+</table>
+
 <ul>
   <li>
-    <strong>TEST</strong> — paste a player's name and get one-click copy buttons for
-    every test question, plus <strong>Accept / Reject / Log&nbsp;/d</strong> message helpers with
-    AV count selection.
+    <strong>TEST</strong> — paste a player's name and click <strong>Copy Start Test Message</strong> to auto-fill the formatted start-test message with the player's name. Use the <strong>Accept</strong>, <strong>Reject</strong>, and <strong>Log&nbsp;/d</strong> buttons (with AV count selection) to copy the standard PD test-flow messages.
     <br>
-    👉 The question list is <strong>fully editable</strong>: add, edit, or delete questions
-    per faction. Each question gets its own <strong>Copy / Edit / Delete</strong> row.
-    Changes are saved automatically in <code>%APPDATA%\MTA Assistant\test_questions.json</code>
-    and remembered per faction.
+    👉 The question list is <strong>fully editable</strong>: add, edit, or delete questions per faction. Each question gets its own <strong>Copy / Edit / Delete</strong> row. Changes are saved automatically in <code>%APPDATA%\MTA Assistant\test_questions.json</code> and remembered per faction.
   </li>
   <li>
-    <strong>FP Calculator</strong> — automatically computes a player's FP based on rank,
-    FW count, and special conditions (Outlaw, insulting the leader, 2 FWs in the first week,
-    4+ total FWs, early resignation). Direct-kick cases override the rank-based calculation.
+    <strong>FP Calculator</strong> — automatically computes a player's FP based on rank, FW count, and special conditions (Outlaw, insulting the leader, 2 FWs in the first week, 4+ total FWs, early resignation). Direct-kick cases override the rank-based calculation.
   </li>
 </ul>
+<p>Switching faction in Settings updates the panel <strong>instantly</strong> — no restart needed.</p>
 
 <h3>🚔 Fine Calculator <em>(Police Department only)</em></h3>
 <p>Enter a driver's speed and choose a location (LS City, LV City, SF City, Heavy Traffic, Highway) to instantly compute the fine:</p>
@@ -418,6 +440,17 @@
 <hr>
 
 <h2>📋 Changelog</h2>
+
+<h3>v1.14.0</h3>
+<ul>
+  <li>👮 <strong>TEST tab</strong> is now available for <strong>every faction</strong> with an editable question list</li>
+  <li>📋 <strong>Copy Start Test Message</strong> button restored — shown for <strong>Police Department only</strong></li>
+  <li>📝 <strong>Accept / Reject / Log&nbsp;/d</strong> with AV Count restored — shown for <strong>Police Department only</strong></li>
+  <li>🔄 PD-only sections now toggle <strong>instantly</strong> when switching faction (no restart needed)</li>
+  <li>🎨 Sub-Leaders Panel description adapts to the current faction</li>
+  <li>🐛 Fixed PD-only sections not appearing when Police Department was already active at launch</li>
+  <li>🐛 Fixed faction switching not updating the visibility of PD-only sections</li>
+</ul>
 
 <h3>v1.13.0</h3>
 <ul>
