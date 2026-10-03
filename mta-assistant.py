@@ -1,5 +1,5 @@
 """
-MTA Assistant - v1.13.0  ( Made By AmooReza )
+MTA Assistant - v1.14.0  ( Made By AmooReza )
 A PySide6 Windows application for MTA:SA players.
 Offline license system (Ed25519) + 15-day trial.
 """
@@ -51,7 +51,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 APP_NAME = "MTA Assistant"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.14.0"
 APP_AUTHOR = "AmooReza"
 APP_TITLE = f"{APP_NAME} — v{APP_VERSION}  ( Made By {APP_AUTHOR} )"
 
@@ -209,12 +209,24 @@ FINE_LOCATIONS = [
 
 PD_FACTION_NAME = "Police Department"
 
-# --- Sub-Leaders Panel — TEST tab templates ---
+# --- Sub-Leaders Panel — TEST tab templates (PD only) ---
 TEST_START_MESSAGE_TEMPLATE = (
     "say #777777 Test ID #2DD3D3 {name} #09ff09 Started. "
     "#777777 [#33CCFF AFK , Time Out #33CCFF , Quit ,  3/3 Av "
     "#33CCFF = #ff0000 Rad #777777 ]"
 )
+
+TEST_ACCEPT_TEMPLATE = (
+    "say #2DD3D3 Shoma Dar Test Faction [#266DB4 Police Department] "
+    "Ba {av}/3 Av Accpet Shodid !"
+)
+
+TEST_REJECT_MESSAGE = (
+    "say  #777777 Shoma Dar Test Faction #266DB4Police Department "
+    "#777777Ba #33CCFF 3#FF3333/#33CCFF3 #FF3333AV Rad Shodid !"
+)
+
+TEST_LOG_D_TEMPLATE = 'd The New Member Of Police Department " {name} " | #Wlc'
 
 # Default PD questions (used if user hasn't customised them yet)
 TEST_QUESTIONS = [
@@ -237,18 +249,6 @@ TEST_QUESTIONS = [
 DEFAULT_SAMPLE_QUESTION = (
     "say #00BFFF 1. Non-Rp Chist? +1 Mesal (#DDA0DD30 Sec#00BFFF)"
 )
-
-TEST_ACCEPT_TEMPLATE = (
-    "say #2DD3D3 Shoma Dar Test Faction [#266DB4 Police Department] "
-    "Ba {av}/3 Av Accpet Shodid !"
-)
-
-TEST_REJECT_MESSAGE = (
-    "say  #777777 Shoma Dar Test Faction #266DB4Police Department "
-    "#777777Ba #33CCFF 3#FF3333/#33CCFF3 #FF3333AV Rad Shodid !"
-)
-
-TEST_LOG_D_TEMPLATE = 'd The New Member Of Police Department " {name} " | #Wlc'
 
 # --- FP Calculator constants ---
 FP_BASE_BY_RANK = {
@@ -526,7 +526,6 @@ def _questions_file_path() -> Path:
 
 
 def load_all_questions() -> dict[str, list[str]]:
-    """Load the raw dict of faction -> list-of-questions."""
     path = _questions_file_path()
     try:
         if path.is_file():
@@ -554,14 +553,11 @@ def save_all_questions(data: dict[str, list[str]]) -> None:
 
 
 def get_questions_for(faction: str) -> list[str]:
-    """Return the current list of questions for a faction.
-    Defaults are used only if the faction has never been saved."""
     data = load_all_questions()
     if faction in data:
         return list(data[faction])
     if faction == PD_FACTION_NAME:
         return list(TEST_QUESTIONS)
-    # Default sample question for every other faction
     return [DEFAULT_SAMPLE_QUESTION]
 
 
@@ -575,7 +571,6 @@ def save_questions_for(faction: str, questions: list[str]) -> None:
 # HWID — Hardware ID
 # ═══════════════════════════════════════════════════════════════════
 def get_hwid() -> str:
-    """Generate a stable HWID for this Windows machine."""
     parts = []
 
     try:
@@ -3086,7 +3081,7 @@ class MainWindow(QMainWindow):
         act_clear.triggered.connect(self.clear_reports)
         tools_menu.addAction(act_clear)
 
-        # Sub-Leaders Panel — available for ALL factions now
+        # Sub-Leaders Panel — available for ALL factions
         self.sub_leaders_menu = menubar.addMenu("Sub-Leaders Panel")
         self.act_open_sub_leaders = QAction("Open Sub-Leaders Panel", self)
         self.act_open_sub_leaders.triggered.connect(self.open_sub_leaders_panel)
@@ -3354,8 +3349,9 @@ class MainWindow(QMainWindow):
         sl_title = QLabel("👮  Sub-Leaders Panel")
         sl_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         sl_desc = QLabel(
-            "Tools for sub-leaders. Police Department gets editable test "
-            "questions with copy buttons; every faction gets the FP calculator."
+            "Tools for sub-leaders: an editable test question list, plus "
+            "test flow helpers for Police Department, and an FP calculator "
+            "for every faction."
         )
         sl_desc.setWordWrap(True)
         sl_desc.setObjectName("hintLabel")
@@ -3732,10 +3728,10 @@ class MainWindow(QMainWindow):
 
         self.sub_leaders_tabs = QTabWidget()
 
-        # TEST tab is only shown for Police Department.
-        if self.faction == PD_FACTION_NAME:
-            self.sub_leaders_tabs.addTab(self._create_test_tab(), "TEST")
+        # TEST tab is available for ALL factions.
+        self.sub_leaders_tabs.addTab(self._create_test_tab(), "TEST")
 
+        # FP Calculator tab is available for ALL factions.
         self.sub_leaders_tabs.addTab(self._create_fp_calc_tab(), "FP Calculator")
 
         layout.addWidget(self.sub_leaders_tabs, 1)
@@ -3748,15 +3744,22 @@ class MainWindow(QMainWindow):
         if self.faction == PD_FACTION_NAME:
             self.sub_leaders_info.setText(
                 f"Tools for {self.faction} sub-leaders: "
-                "editable test questions with copy buttons and an FP calculator."
+                "an editable test question list, test flow helpers, and an "
+                "FP calculator."
             )
         else:
             self.sub_leaders_info.setText(
                 f"Tools for {self.faction} sub-leaders: "
-                "an FP calculator based on rank, FW count, and special conditions."
+                "an editable test question list and an FP calculator."
             )
 
     def _create_test_tab(self) -> QWidget:
+        """TEST tab — available for every faction.
+
+        All widgets are always created. Player Name + Copy Start Test Message
+        and Accept / Reject / Log d sections are only VISIBLE for Police
+        Department. Visibility is toggled by _update_pd_only_test_visibility()
+        at construction time and whenever the faction changes."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -3770,10 +3773,10 @@ class MainWindow(QMainWindow):
         cv.setContentsMargins(4, 4, 4, 4)
         cv.setSpacing(14)
 
-        # ── Section 1: Player Name + Start Test Message ─────────
-        name_card = QFrame()
-        name_card.setObjectName("card")
-        ncv = QVBoxLayout(name_card)
+        # ── Section 1: Player Name + Copy Start Test Message (PD only) ─
+        self.test_name_card = QFrame()
+        self.test_name_card.setObjectName("card")
+        ncv = QVBoxLayout(self.test_name_card)
         ncv.setContentsMargins(20, 20, 20, 20)
         ncv.setSpacing(10)
 
@@ -3796,14 +3799,13 @@ class MainWindow(QMainWindow):
         self.test_player_name_edit.textChanged.connect(self._on_test_name_changed)
         ncv.addWidget(self.test_player_name_edit)
 
-        # NEW — Copy Start Test Message button
         self.test_start_btn = QPushButton("Copy Start Test Message")
         self.test_start_btn.setMinimumHeight(42)
         self.test_start_btn.setEnabled(False)
         self.test_start_btn.clicked.connect(self._copy_test_start)
         ncv.addWidget(self.test_start_btn)
 
-        cv.addWidget(name_card)
+        cv.addWidget(self.test_name_card)
 
         # ── Section 2: Editable Question List ────────────────────
         q_card = QFrame()
@@ -3847,10 +3849,10 @@ class MainWindow(QMainWindow):
 
         cv.addWidget(q_card)
 
-        # ── Section 3: Accept / Reject ───────────────────────────
-        ar_card = QFrame()
-        ar_card.setObjectName("card")
-        arcv = QVBoxLayout(ar_card)
+        # ── Section 3: Accept / Reject (PD only) ─────────────────
+        self.test_ar_card = QFrame()
+        self.test_ar_card.setObjectName("card")
+        arcv = QVBoxLayout(self.test_ar_card)
         arcv.setContentsMargins(20, 20, 20, 20)
         arcv.setSpacing(10)
 
@@ -3912,19 +3914,32 @@ class MainWindow(QMainWindow):
 
         ar_btns.addStretch()
         arcv.addLayout(ar_btns)
-        cv.addWidget(ar_card)
+        cv.addWidget(self.test_ar_card)
 
         cv.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
+        # Apply initial visibility based on the current faction
+        self._update_pd_only_test_visibility()
+
         # Build the initial question rows for the current faction
         self._refresh_test_questions_ui()
         return tab
 
+    def _update_pd_only_test_visibility(self) -> None:
+        """Show the PD-only sections (Player Name + Copy Start Test Message
+        and Accept / Reject / Log d) only when the current faction is
+        Police Department. Called at construction time and after changing
+        faction."""
+        is_pd = (self.faction == PD_FACTION_NAME)
+        if hasattr(self, "test_name_card"):
+            self.test_name_card.setVisible(is_pd)
+        if hasattr(self, "test_ar_card"):
+            self.test_ar_card.setVisible(is_pd)
+
     # ---------------- TEST tab — editable question list logic ----------------
     def _refresh_test_questions_ui(self) -> None:
-        """Rebuild the question rows from self.test_questions."""
         if not hasattr(self, "questions_layout"):
             return
 
@@ -4066,6 +4081,59 @@ class MainWindow(QMainWindow):
         self._copy_to_clipboard(
             self.test_questions[index], f"Question {index + 1}"
         )
+
+    # ---------------- TEST tab — PD test-flow helpers ----------------
+    def _on_test_name_changed(self, text: str) -> None:
+        has_name = bool(text.strip())
+        if hasattr(self, "test_start_btn"):
+            self.test_start_btn.setEnabled(has_name)
+        if hasattr(self, "test_accept_btn"):
+            self.test_accept_btn.setEnabled(has_name)
+        if hasattr(self, "test_reject_btn"):
+            self.test_reject_btn.setEnabled(has_name)
+        if hasattr(self, "test_log_btn"):
+            self.test_log_btn.setEnabled(has_name)
+
+    def _get_test_player_name(self) -> str:
+        if not hasattr(self, "test_player_name_edit"):
+            return ""
+        return self.test_player_name_edit.text().strip()
+
+    def _copy_test_start(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        text = TEST_START_MESSAGE_TEMPLATE.format(name=name)
+        self._copy_to_clipboard(text, "Start test message")
+
+    def _get_selected_av(self) -> int:
+        if not hasattr(self, "test_av_radios"):
+            return 0
+        for av, rb in self.test_av_radios.items():
+            if rb.isChecked():
+                return av
+        return 0
+
+    def _copy_test_accept(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        av = self._get_selected_av()
+        text = TEST_ACCEPT_TEMPLATE.format(av=av)
+        self._copy_to_clipboard(text, f"Accept ({av}/3)")
+
+    def _copy_test_reject(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        self._copy_to_clipboard(TEST_REJECT_MESSAGE, "Reject")
+
+    def _copy_test_log_d(self) -> None:
+        name = self._get_test_player_name()
+        if not name:
+            return
+        text = TEST_LOG_D_TEMPLATE.format(name=name)
+        self._copy_to_clipboard(text, "Log /d")
 
     # ---------------- FP Calculator tab ----------------
     def _create_fp_calc_tab(self) -> QWidget:
@@ -4420,6 +4488,7 @@ class MainWindow(QMainWindow):
         self.settings_theme_label.setText(f"Current theme: {theme_display}")
 
         self._update_sub_leaders_info_text()
+        self._update_pd_only_test_visibility()
 
         if coming_soon:
             folder_names = [name for name, _ in COMING_SOON_FACTIONS[self.faction]]
@@ -4634,7 +4703,7 @@ class MainWindow(QMainWindow):
             self.fine_card.setVisible(is_pd)
         if hasattr(self, "act_fine"):
             self.act_fine.setEnabled(is_pd)
-        # Sub-Leaders Panel is available for ALL factions now
+        # Sub-Leaders Panel is available for ALL factions
         if hasattr(self, "sub_leaders_card"):
             self.sub_leaders_card.setVisible(True)
         if hasattr(self, "sub_leaders_menu"):
@@ -4644,23 +4713,7 @@ class MainWindow(QMainWindow):
     def open_sub_leaders_panel(self) -> None:
         self.stack.setCurrentWidget(self.sub_leaders_page)
 
-    # ---------------- TEST tab logic ----------------
-    def _on_test_name_changed(self, text: str) -> None:
-        has_name = bool(text.strip())
-        if hasattr(self, "test_start_btn"):
-            self.test_start_btn.setEnabled(has_name)
-        if hasattr(self, "test_accept_btn"):
-            self.test_accept_btn.setEnabled(has_name)
-        if hasattr(self, "test_reject_btn"):
-            self.test_reject_btn.setEnabled(has_name)
-        if hasattr(self, "test_log_btn"):
-            self.test_log_btn.setEnabled(has_name)
-
-    def _get_test_player_name(self) -> str:
-        if not hasattr(self, "test_player_name_edit"):
-            return ""
-        return self.test_player_name_edit.text().strip()
-
+    # ---------------- Clipboard helper ----------------
     def _copy_to_clipboard(self, text: str, label: str) -> None:
         try:
             QApplication.clipboard().setText(text)
@@ -4670,42 +4723,6 @@ class MainWindow(QMainWindow):
                 self, "Copy Failed",
                 f"Failed to copy to clipboard:\n{exc}"
             )
-
-    def _copy_test_start(self) -> None:
-        name = self._get_test_player_name()
-        if not name:
-            return
-        text = TEST_START_MESSAGE_TEMPLATE.format(name=name)
-        self._copy_to_clipboard(text, "Start test message")
-
-    def _get_selected_av(self) -> int:
-        if not hasattr(self, "test_av_radios"):
-            return 0
-        for av, rb in self.test_av_radios.items():
-            if rb.isChecked():
-                return av
-        return 0
-
-    def _copy_test_accept(self) -> None:
-        name = self._get_test_player_name()
-        if not name:
-            return
-        av = self._get_selected_av()
-        text = TEST_ACCEPT_TEMPLATE.format(av=av)
-        self._copy_to_clipboard(text, f"Accept ({av}/3)")
-
-    def _copy_test_reject(self) -> None:
-        name = self._get_test_player_name()
-        if not name:
-            return
-        self._copy_to_clipboard(TEST_REJECT_MESSAGE, "Reject")
-
-    def _copy_test_log_d(self) -> None:
-        name = self._get_test_player_name()
-        if not name:
-            return
-        text = TEST_LOG_D_TEMPLATE.format(name=name)
-        self._copy_to_clipboard(text, "Log /d")
 
     # ---------------- FP Calculator logic ----------------
     def _get_selected_fp_rank(self) -> int:
@@ -5402,11 +5419,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "questions_layout"):
             self._refresh_test_questions_ui()
 
+        # Toggle visibility of PD-only sections in the TEST tab
+        self._update_pd_only_test_visibility()
+
         self._refresh_labels()
         QMessageBox.information(self, "Saved", f"Faction changed to {self.faction}.")
-
-        # Suggest re-opening the Sub-Leaders panel so tab layout refreshes
-        # for the new faction (TEST tab is only shown for Police Department).
 
     def change_rank(self) -> None:
         if not faction_requires_rank(self.faction):
@@ -5458,9 +5475,10 @@ class MainWindow(QMainWindow):
             "• Creates a zipped work report on the Desktop with a preview "
             "and disk-space check before starting.<br>"
             "• 🚔 Fine Calculator for Police Department (speed violations).<br>"
-            "• 👮 Sub-Leaders Panel — TEST tab (editable questions, Copy Start "
-            "Test Message, Accept / Reject / Log d) available only for Police "
-            "Department; FP Calculator available for every faction.<br>"
+            "• 👮 Sub-Leaders Panel available for every faction — an editable "
+            "test question list and an FP Calculator. Test flow helpers "
+            "(Copy Start Test Message, Accept / Reject, Log /d) are only "
+            "shown for Police Department.<br>"
             "• Faction Stats Dashboard with visual category breakdown.<br>"
             "• Progress dialog with live ETA.<br>"
             "• Exports reports to CSV or PDF.<br>"
