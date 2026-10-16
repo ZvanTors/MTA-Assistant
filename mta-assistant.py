@@ -208,8 +208,9 @@ FINE_LOCATIONS = [
 ]
 
 PD_FACTION_NAME = "Police Department"
+MEDIC_FACTION_NAME = "Medic"
 
-# --- Sub-Leaders Panel — TEST tab templates (PD only) ---
+# --- Sub-Leaders Panel — TEST tab templates (PD) ---
 TEST_START_MESSAGE_TEMPLATE = (
     "say #777777 Test ID #2DD3D3 {name} #09ff09 Started. "
     "#777777 [#33CCFF AFK , Time Out #33CCFF , Quit ,  3/3 Av "
@@ -227,6 +228,26 @@ TEST_REJECT_MESSAGE = (
 )
 
 TEST_LOG_D_TEMPLATE = 'd The New Member Of Police Department " {name} " | #Wlc'
+
+# --- Sub-Leaders Panel — TEST tab templates (Medic) ---
+MEDIC_TEST_START_MESSAGE_TEMPLATE = (
+    'say #f9e79fTest Player #05E94C“{name}” #f9e79fStarted '
+    '#FF0000[AFK, Quit, Time Out , 3/3 Av = Rad]'
+)
+
+MEDIC_TEST_ACCEPT_TEMPLATE = (
+    'say #f9e79fTest Player #05E94C“{name}” #f9e79fOver #FFFFFF| '
+    '#f9e79fShoma Dar Test Ba {av}/3 Av #00FF00Qabol Shodid #FFFFFF| #Wlc'
+)
+
+MEDIC_TEST_REJECT_TEMPLATE = (
+    'say #f9e79fTest Player #05E94C“{name}” #f9e79fOver #FFFFFF| '
+    '#f9e79fShoma Dar Test Ba 3/3 Av #FF0000Rad Shodid #FFFFFF| #GL'
+)
+
+MEDIC_TEST_LOG_F_TEMPLATE = (
+    'f The New Member Of Medical Department | Pezeshk {name} | #Wlc'
+)
 
 # Default PD questions (used if user hasn't customised them yet)
 TEST_QUESTIONS = [
@@ -3741,7 +3762,7 @@ class MainWindow(QMainWindow):
     def _update_sub_leaders_info_text(self) -> None:
         if not hasattr(self, "sub_leaders_info"):
             return
-        if self.faction == PD_FACTION_NAME:
+        if self.faction in (PD_FACTION_NAME, MEDIC_FACTION_NAME):
             self.sub_leaders_info.setText(
                 f"Tools for {self.faction} sub-leaders: "
                 "an editable test question list, test flow helpers, and an "
@@ -3757,9 +3778,10 @@ class MainWindow(QMainWindow):
         """TEST tab — available for every faction.
 
         All widgets are always created. Player Name + Copy Start Test Message
-        and Accept / Reject / Log d sections are only VISIBLE for Police
-        Department. Visibility is toggled by _update_pd_only_test_visibility()
-        at construction time and whenever the faction changes."""
+        and Accept / Reject / Log sections are only VISIBLE for Police
+        Department and Medic. Visibility is toggled by
+        _update_test_flow_visibility() at construction time and whenever the
+        faction changes."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -3862,7 +3884,7 @@ class MainWindow(QMainWindow):
 
         ar_hint = QLabel(
             "Select the number of AV questions the player failed, then "
-            "click Accept or Reject. Use Log /d to announce a new member."
+            "click Accept or Reject. Use the Log button to announce a new member."
         )
         ar_hint.setObjectName("hintLabel")
         ar_hint.setStyleSheet("font-size: 12px;")
@@ -3878,9 +3900,9 @@ class MainWindow(QMainWindow):
         self.test_av_group = QButtonGroup(self)
         self.test_av_radios: dict[int, QRadioButton] = {}
         for av in (0, 1, 2):
-            rb = QRadioButton(f"{av}/3")
+            rb = QRadioButton(f"{av}/3 AV")
             rb.setMinimumHeight(32)
-            rb.setMinimumWidth(70)
+            rb.setMinimumWidth(80)
             if av == 0:
                 rb.setChecked(True)
             self.test_av_group.addButton(rb)
@@ -3909,7 +3931,7 @@ class MainWindow(QMainWindow):
         self.test_log_btn.setObjectName("secondaryButton")
         self.test_log_btn.setMinimumHeight(42)
         self.test_log_btn.setEnabled(False)
-        self.test_log_btn.clicked.connect(self._copy_test_log_d)
+        self.test_log_btn.clicked.connect(self._copy_test_log)
         ar_btns.addWidget(self.test_log_btn)
 
         ar_btns.addStretch()
@@ -3921,22 +3943,27 @@ class MainWindow(QMainWindow):
         layout.addWidget(scroll, 1)
 
         # Apply initial visibility based on the current faction
-        self._update_pd_only_test_visibility()
+        self._update_test_flow_visibility()
 
         # Build the initial question rows for the current faction
         self._refresh_test_questions_ui()
         return tab
 
-    def _update_pd_only_test_visibility(self) -> None:
-        """Show the PD-only sections (Player Name + Copy Start Test Message
-        and Accept / Reject / Log d) only when the current faction is
-        Police Department. Called at construction time and after changing
-        faction."""
-        is_pd = (self.faction == PD_FACTION_NAME)
+    def _update_test_flow_visibility(self) -> None:
+        """Show the test-flow sections (Player Name + Copy Start Test Message
+        and Accept / Reject / Log) for Police Department and Medic.
+        Also updates the Log button label to match the faction.
+        Called at construction time and after changing faction."""
+        show = self.faction in (PD_FACTION_NAME, MEDIC_FACTION_NAME)
         if hasattr(self, "test_name_card"):
-            self.test_name_card.setVisible(is_pd)
+            self.test_name_card.setVisible(show)
         if hasattr(self, "test_ar_card"):
-            self.test_ar_card.setVisible(is_pd)
+            self.test_ar_card.setVisible(show)
+        if hasattr(self, "test_log_btn"):
+            if self.faction == MEDIC_FACTION_NAME:
+                self.test_log_btn.setText("Log /f")
+            else:
+                self.test_log_btn.setText("Log /d")
 
     # ---------------- TEST tab — editable question list logic ----------------
     def _refresh_test_questions_ui(self) -> None:
@@ -4082,7 +4109,7 @@ class MainWindow(QMainWindow):
             self.test_questions[index], f"Question {index + 1}"
         )
 
-    # ---------------- TEST tab — PD test-flow helpers ----------------
+    # ---------------- TEST tab — test-flow helpers (PD / Medic) ----------------
     def _on_test_name_changed(self, text: str) -> None:
         has_name = bool(text.strip())
         if hasattr(self, "test_start_btn"):
@@ -4103,7 +4130,10 @@ class MainWindow(QMainWindow):
         name = self._get_test_player_name()
         if not name:
             return
-        text = TEST_START_MESSAGE_TEMPLATE.format(name=name)
+        if self.faction == MEDIC_FACTION_NAME:
+            text = MEDIC_TEST_START_MESSAGE_TEMPLATE.format(name=name)
+        else:
+            text = TEST_START_MESSAGE_TEMPLATE.format(name=name)
         self._copy_to_clipboard(text, "Start test message")
 
     def _get_selected_av(self) -> int:
@@ -4119,21 +4149,32 @@ class MainWindow(QMainWindow):
         if not name:
             return
         av = self._get_selected_av()
-        text = TEST_ACCEPT_TEMPLATE.format(av=av)
+        if self.faction == MEDIC_FACTION_NAME:
+            text = MEDIC_TEST_ACCEPT_TEMPLATE.format(name=name, av=av)
+        else:
+            text = TEST_ACCEPT_TEMPLATE.format(av=av)
         self._copy_to_clipboard(text, f"Accept ({av}/3)")
 
     def _copy_test_reject(self) -> None:
         name = self._get_test_player_name()
         if not name:
             return
-        self._copy_to_clipboard(TEST_REJECT_MESSAGE, "Reject")
+        if self.faction == MEDIC_FACTION_NAME:
+            text = MEDIC_TEST_REJECT_TEMPLATE.format(name=name)
+        else:
+            text = TEST_REJECT_MESSAGE
+        self._copy_to_clipboard(text, "Reject")
 
-    def _copy_test_log_d(self) -> None:
+    def _copy_test_log(self) -> None:
         name = self._get_test_player_name()
         if not name:
             return
-        text = TEST_LOG_D_TEMPLATE.format(name=name)
-        self._copy_to_clipboard(text, "Log /d")
+        if self.faction == MEDIC_FACTION_NAME:
+            text = MEDIC_TEST_LOG_F_TEMPLATE.format(name=name)
+            self._copy_to_clipboard(text, "Log /f")
+        else:
+            text = TEST_LOG_D_TEMPLATE.format(name=name)
+            self._copy_to_clipboard(text, "Log /d")
 
     # ---------------- FP Calculator tab ----------------
     def _create_fp_calc_tab(self) -> QWidget:
@@ -4488,7 +4529,7 @@ class MainWindow(QMainWindow):
         self.settings_theme_label.setText(f"Current theme: {theme_display}")
 
         self._update_sub_leaders_info_text()
-        self._update_pd_only_test_visibility()
+        self._update_test_flow_visibility()
 
         if coming_soon:
             folder_names = [name for name, _ in COMING_SOON_FACTIONS[self.faction]]
@@ -5419,8 +5460,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "questions_layout"):
             self._refresh_test_questions_ui()
 
-        # Toggle visibility of PD-only sections in the TEST tab
-        self._update_pd_only_test_visibility()
+        # Toggle visibility of test-flow sections in the TEST tab
+        self._update_test_flow_visibility()
 
         self._refresh_labels()
         QMessageBox.information(self, "Saved", f"Faction changed to {self.faction}.")
